@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: example-app-dex-client
+stringData:
+  client-secret: change-me
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexClient
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: example-app
+spec:
+  connectionRef:
+    name: dex-local
+  clientID: example-app
+  secret:
+    valueFrom:
+      secretKeyRef:
+        name: example-app-dex-client
+        key: client-secret
+  redirectURIs:
+    - https://app.example.com/callback
+  name: Example App

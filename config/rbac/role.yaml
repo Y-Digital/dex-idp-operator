@@ -1,0 +1,43 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.groeneslot.nl
+  resources:
+  - dexclients
+  - dexconnections
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - idp.groeneslot.nl
+  resources:
+  - dexclients/finalizers
+  - dexconnections/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - idp.groeneslot.nl
+  resources:
+  - dexclients/status
+  - dexconnections/status
+  verbs:
+  - get
+  - patch
+  - update

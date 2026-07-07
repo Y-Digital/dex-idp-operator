@@ -1,0 +1,10 @@
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnection
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dex-local
+spec:
+  address: dex.dex.svc.cluster.local:5557
+  plaintext: true
