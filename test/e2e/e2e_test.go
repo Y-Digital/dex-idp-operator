@@ -20,15 +20,24 @@ limitations under the License.
 package e2e
 
 import (
+	"bytes"
+	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
+	dexapi "github.com/dexidp/dex/api/v2"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	"groeneslot.nl/dex-idp-operator/test/utils"
 )
@@ -44,6 +53,8 @@ const metricsServiceName = "dex-idp-operator-controller-manager-metrics-service"
 
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "dex-idp-operator-metrics-binding"
+
+const dexNamespace = "dex"
 
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
@@ -72,6 +83,9 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
+
+		By("installing Dex for functional tests")
+		installDex()
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -80,6 +94,13 @@ var _ = Describe("Manager", Ordered, func() {
 		By("cleaning up the curl pod for metrics")
 		cmd := exec.Command("kubectl", "delete", "pod", "curl-metrics", "-n", namespace)
 		_, _ = utils.Run(cmd)
+
+		By("cleaning up the metrics ClusterRoleBinding")
+		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+		_, _ = utils.Run(cmd)
+
+		By("removing Dex")
+		uninstallDex()
 
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
@@ -174,12 +195,17 @@ var _ = Describe("Manager", Ordered, func() {
 		})
 
 		It("should ensure the metrics endpoint is serving metrics", func() {
+			By("removing any existing metrics ClusterRoleBinding")
+			cmd := exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred(), "Failed to remove existing ClusterRoleBinding")
+
 			By("creating a ClusterRoleBinding for the service account to allow access to metrics")
-			cmd := exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
+			cmd = exec.Command("kubectl", "create", "clusterrolebinding", metricsRoleBindingName,
 				"--clusterrole=dex-idp-operator-metrics-reader",
 				fmt.Sprintf("--serviceaccount=%s:%s", namespace, serviceAccountName),
 			)
-			_, err := utils.Run(cmd)
+			_, err = utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred(), "Failed to create ClusterRoleBinding")
 
 			By("validating that the metrics service is available")
@@ -268,6 +294,74 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
 
+		It("should reconcile Dex OAuth2 clients into Dex", func() {
+			By("creating Dex connection and client resources")
+			applyYAML(fmt.Sprintf(dexClientE2EManifest, namespace))
+
+			By("waiting for the DexClient to sync")
+			Eventually(dexClientCondition(namespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
+				Should(Equal("True"))
+
+			By("checking the client exists in Dex")
+			dexAPI, closeDex := portForwardDex()
+			defer closeDex()
+
+			Eventually(func(g Gomega) {
+				client, err := dexAPI.GetClient(context.Background(), &dexapi.GetClientReq{Id: "e2e-app"})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(client.GetClient().GetSecret()).To(Equal("initial-secret"))
+				g.Expect(client.GetClient().GetRedirectUris()).To(Equal([]string{"https://app.example.com/callback"}))
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("updating mutable Dex client fields")
+			patchDexClient(namespace, "e2e-app", `{
+				"spec": {
+					"redirectURIs": ["https://app.example.com/updated-callback"],
+					"name": "Updated E2E App"
+				}
+			}`)
+			Eventually(func(g Gomega) {
+				client, err := dexAPI.GetClient(context.Background(), &dexapi.GetClientReq{Id: "e2e-app"})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(client.GetClient().GetName()).To(Equal("Updated E2E App"))
+				g.Expect(client.GetClient().GetRedirectUris()).To(Equal([]string{"https://app.example.com/updated-callback"}))
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("rotating the Secret and observing blocked immutable change")
+			patchSecret(namespace, "e2e-app-secret", "rotated-secret")
+			Eventually(dexClientCondition(namespace, "e2e-app", "Blocked"), time.Minute, time.Second).
+				Should(Equal("True"))
+
+			By("allowing recreate for immutable change")
+			patchDexClient(namespace, "e2e-app", `{
+				"spec": {
+					"recreateOnImmutableChange": true
+				}
+			}`)
+			Eventually(dexClientCondition(namespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
+				Should(Equal("True"))
+			Eventually(func(g Gomega) {
+				client, err := dexAPI.GetClient(context.Background(), &dexapi.GetClientReq{Id: "e2e-app"})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(client.GetClient().GetSecret()).To(Equal("rotated-secret"))
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("deleting the DexClient and verifying Dex cleanup")
+			cmd := exec.Command("kubectl", "delete", "dexclient", "e2e-app", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "get", "dexclient", "e2e-app", "-n", namespace)
+				_, err := utils.Run(cmd)
+				g.Expect(err).To(HaveOccurred())
+			}, time.Minute, time.Second).Should(Succeed())
+			Eventually(func(g Gomega) {
+				_, err := dexAPI.GetClient(context.Background(), &dexapi.GetClientReq{Id: "e2e-app"})
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(status.Convert(err).Message()).To(ContainSubstring("not found"))
+			}, time.Minute, time.Second).Should(Succeed())
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -281,6 +375,226 @@ var _ = Describe("Manager", Ordered, func() {
 		// ))
 	})
 })
+
+const dexManifest = `apiVersion: v1
+kind: Namespace
+metadata:
+  name: dex
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dex-config
+  namespace: dex
+data:
+  config.yaml: |
+    issuer: http://dex.dex.svc.cluster.local:5556/dex
+    storage:
+      type: sqlite3
+      config:
+        file: /tmp/dex.db
+    web:
+      http: 0.0.0.0:5556
+    grpc:
+      addr: 0.0.0.0:5557
+    connectors:
+    - type: mockCallback
+      id: mock
+      name: Mock
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: dex
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: dex
+    spec:
+      containers:
+      - name: dex
+        image: ghcr.io/dexidp/dex:v2.43.1
+        command:
+        - dex
+        - serve
+        - /etc/dex/config.yaml
+        ports:
+        - name: http
+          containerPort: 5556
+        - name: grpc
+          containerPort: 5557
+        volumeMounts:
+        - name: config
+          mountPath: /etc/dex
+          readOnly: true
+      volumes:
+      - name: config
+        configMap:
+          name: dex-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  namespace: dex
+spec:
+  selector:
+    app.kubernetes.io/name: dex
+  ports:
+  - name: http
+    port: 5556
+    targetPort: http
+  - name: grpc
+    port: 5557
+    targetPort: grpc
+`
+
+const dexClientE2EManifest = `apiVersion: v1
+kind: Secret
+metadata:
+  name: e2e-app-secret
+  namespace: %[1]s
+stringData:
+  client-secret: initial-secret
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnection
+metadata:
+  name: dex-e2e
+  namespace: %[1]s
+spec:
+  address: dex.dex.svc.cluster.local:5557
+  plaintext: true
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexClient
+metadata:
+  name: e2e-app
+  namespace: %[1]s
+spec:
+  connectionRef:
+    name: dex-e2e
+  clientID: e2e-app
+  secret:
+    valueFrom:
+      secretKeyRef:
+        name: e2e-app-secret
+        key: client-secret
+  redirectURIs:
+  - https://app.example.com/callback
+  name: E2E App
+`
+
+func installDex() {
+	applyYAML(dexManifest)
+
+	By("waiting for Dex deployment")
+	cmd := exec.Command("kubectl", "wait", "deployment.apps/dex",
+		"--for", "condition=Available",
+		"--namespace", dexNamespace,
+		"--timeout", "5m",
+	)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed waiting for Dex")
+}
+
+func uninstallDex() {
+	cmd := exec.Command("kubectl", "delete", "ns", dexNamespace, "--ignore-not-found")
+	_, _ = utils.Run(cmd)
+}
+
+func applyYAML(manifest string) {
+	cmd := exec.Command("kubectl", "apply", "-f", "-")
+	cmd.Stdin = strings.NewReader(manifest)
+	_, err := run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func patchDexClient(namespace, name, patch string) {
+	cmd := exec.Command("kubectl", "patch", "dexclient", name, "-n", namespace, "--type", "merge", "-p", patch)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func patchSecret(namespace, name, secret string) {
+	encodedSecret := base64.StdEncoding.EncodeToString([]byte(secret))
+	patch := fmt.Sprintf(`{"data":{"client-secret":"%s"}}`, encodedSecret)
+	cmd := exec.Command("kubectl", "patch", "secret", name, "-n", namespace, "--type", "merge", "-p", patch)
+	_, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func dexClientCondition(namespace, name, conditionType string) func() string {
+	return func() string {
+		cmd := exec.Command("kubectl", "get", "dexclient", name, "-n", namespace,
+			"-o", fmt.Sprintf("jsonpath={.status.conditions[?(@.type==\"%s\")].status}", conditionType))
+		output, err := utils.Run(cmd)
+		if err != nil {
+			return ""
+		}
+		return output
+	}
+}
+
+func portForwardDex() (dexapi.DexClient, func()) {
+	port := freeLocalPort()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, "kubectl", "port-forward", "-n", dexNamespace,
+		"service/dex", fmt.Sprintf("%d:5557", port))
+	cmd.Stderr = &stderr
+	err := cmd.Start()
+	Expect(err).NotTo(HaveOccurred())
+
+	target := fmt.Sprintf("127.0.0.1:%d", port)
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	Expect(err).NotTo(HaveOccurred())
+
+	dexAPI := dexapi.NewDexClient(conn)
+	Eventually(func(g Gomega) {
+		_, err := dexAPI.GetVersion(context.Background(), &dexapi.VersionReq{})
+		g.Expect(err).NotTo(HaveOccurred(), stderr.String())
+	}, time.Minute, time.Second).Should(Succeed())
+
+	return dexAPI, func() {
+		Expect(conn.Close()).To(Succeed())
+		cancel()
+		_ = cmd.Wait()
+	}
+}
+
+func freeLocalPort() int {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	Expect(err).NotTo(HaveOccurred())
+	defer listener.Close() //nolint:errcheck
+
+	return listener.Addr().(*net.TCPAddr).Port
+}
+
+func run(cmd *exec.Cmd) (string, error) {
+	dir, _ := utils.GetProjectDir()
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GO111MODULE=on")
+	command := strings.Join(cmd.Args, " ")
+	_, _ = fmt.Fprintf(GinkgoWriter, "running: %q\n", command)
+
+	var output bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &output
+	err := cmd.Run()
+	if err != nil {
+		return output.String(), fmt.Errorf("%q failed with error %q: %w", command, output.String(), err)
+	}
+
+	return output.String(), nil
+}
 
 // serviceAccountToken returns a token for the specified service account in the given namespace.
 // It uses the Kubernetes TokenRequest API to generate a token by directly sending a request

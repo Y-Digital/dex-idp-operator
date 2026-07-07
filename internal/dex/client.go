@@ -23,6 +23,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 
 	dexapi "github.com/dexidp/dex/api/v2"
 	"google.golang.org/grpc"
@@ -90,7 +91,7 @@ type grpcClient struct {
 func (c *grpcClient) GetClient(ctx context.Context, id string) (*dexapi.Client, error) {
 	resp, err := c.api.GetClient(ctx, &dexapi.GetClientReq{Id: id})
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
+		if isNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get dex client: %w", err)
@@ -99,6 +100,14 @@ func (c *grpcClient) GetClient(ctx context.Context, id string) (*dexapi.Client, 
 		return nil, ErrNotFound
 	}
 	return resp.GetClient(), nil
+}
+
+func isNotFound(err error) bool {
+	if status.Code(err) == codes.NotFound {
+		return true
+	}
+	grpcStatus, ok := status.FromError(err)
+	return ok && strings.EqualFold(grpcStatus.Message(), "not found")
 }
 
 func (c *grpcClient) CreateClient(ctx context.Context, client *dexapi.Client) (*dexapi.Client, error) {
