@@ -92,8 +92,14 @@ var _ = Describe("DexTenant Controller", func() {
 				&rbacv1.RoleBinding{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&corev1.ConfigMap{})).To(Succeed())
-			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
-				&appsv1.Deployment{})).To(Succeed())
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx,
+				types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
+				Name:  "DEX_API_CONNECTORS_CRUD",
+				Value: "true",
+			}))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&corev1.Service{})).To(Succeed())
 

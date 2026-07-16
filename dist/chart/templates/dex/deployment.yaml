@@ -64,6 +64,9 @@ spec:
         image: "{{ .Values.dex.image.repository }}:{{ .Values.dex.image.tag }}"
         imagePullPolicy: {{ .Values.dex.image.pullPolicy }}
         name: dex
+        env:
+        - name: DEX_API_CONNECTORS_CRUD
+          value: "true"
         ports:
         - containerPort: {{ .Values.dex.service.httpPort }}
           name: http

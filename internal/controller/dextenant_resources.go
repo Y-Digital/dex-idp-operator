@@ -233,6 +233,9 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 							Name:    "dex",
 							Image:   image,
 							Command: []string{"dex", "serve", "/etc/dex/config.yaml"},
+							Env: []corev1.EnvVar{
+								{Name: "DEX_API_CONNECTORS_CRUD", Value: "true"},
+							},
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 5556},
 								{Name: "grpc", ContainerPort: 5557},
