@@ -322,8 +322,22 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/dex-idp-operator/<tag o
 The Helm chart is generated under `dist/chart` and can install the operator
 with or without an in-chart Dex deployment.
 
-Install the operator only and connect it to an externally managed Dex with your
-own `DexConnection` resources:
+Published releases push the **container image** and **Helm chart** to different
+OCI repositories so they do not clobber each other:
+
+- Image: `ghcr.io/<owner>/dex-idp-operator:<version>`
+- Chart: `oci://ghcr.io/<owner>/charts/dex-idp-operator` (version `<version>`)
+
+Install from a published chart:
+
+```sh
+helm install dex-idp-operator oci://ghcr.io/<owner>/charts/dex-idp-operator \
+  --version <version> \
+  --namespace dex-idp-operator-system \
+  --create-namespace
+```
+
+Install from the local chart tree:
 
 ```sh
 helm install dex-idp-operator ./dist/chart \
