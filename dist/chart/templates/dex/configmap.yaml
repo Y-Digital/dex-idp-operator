@@ -1,0 +1,41 @@
+{{- if .Values.dex.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: {{ include "dex-idp-operator.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: dex
+    {{- with .Values.dex.labels }}
+    {{- with omit . "app.kubernetes.io/managed-by" "app.kubernetes.io/name" "helm.sh/chart" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  {{- with .Values.dex.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  name: {{ include "dex-idp-operator.resourceName" (dict "suffix" "dex-config" "context" $) }}
+  namespace: {{ .Release.Namespace }}
+data:
+  config.yaml: |
+    {{- if .Values.dex.config }}
+    {{- toYaml .Values.dex.config | nindent 4 }}
+    {{- else }}
+    issuer: http://{{ include "dex-idp-operator.dexName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.dex.service.httpPort }}/dex
+    storage:
+      type: sqlite3
+      config:
+        file: /tmp/dex.db
+    web:
+      http: 0.0.0.0:{{ .Values.dex.service.httpPort }}
+    grpc:
+      addr: 0.0.0.0:{{ .Values.dex.service.grpcPort }}
+    connectors:
+    - type: mockCallback
+      id: mock
+      name: Mock
+    {{- end }}
+{{- end }}

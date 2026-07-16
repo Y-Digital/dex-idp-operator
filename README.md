@@ -3,23 +3,68 @@
 ## Description
 
 `dex-idp-operator` manages Dex IDP configuration from Kubernetes custom
-resources. The first supported workflow is declarative management of Dex OAuth2
-clients through Dex's gRPC API.
+resources: OAuth2 clients through Dex's gRPC API, per-tenant Dex instances,
+and the upstream IDP connectors those instances authenticate against.
 
-The operator provides two namespaced APIs:
+The operator provides four namespaced APIs:
 
 - `DexConnection` describes how to reach a Dex gRPC endpoint, including TLS
   material supplied inline or from Kubernetes Secrets.
-- `DexClient` describes one Dex OAuth2 client and references a `DexConnection`.
+- `DexClient` describes one Dex OAuth2 client. It targets either a single
+  `DexConnection`, or fans out onto multiple `DexTenant`s (see
+  [Multi-tenant routing](#multi-tenant-routing) below).
+- `DexTenant` describes an operator-managed Dex `Deployment`/`Service` for one
+  tenant, with its own issuer and upstream IDP connector.
+- `DexConnector` describes one Dex connector's native configuration (OIDC,
+  LDAP, GitHub, SAML, etc.), with `SecretRef` support for interpolating
+  secret values into the connector config.
 
 Secrets can be provided either inline for local development or through
 `SecretRef` fields for externally managed secrets. This applies to Dex client
-secrets and to TLS material used to connect to Dex.
+secrets, connector config secrets, and TLS material used to connect to Dex.
 
 Dex can update client redirect URIs, trusted peers, name, and logo URL in place.
 Dex does not update client secrets or the public/confidential setting through
 its update API. When those immutable fields change, the operator marks the
 `DexClient` as blocked unless `spec.recreateOnImmutableChange` is set to `true`.
+
+### Multi-tenant routing
+
+A common use case is a backend application that performs a single OIDC
+exchange with Dex, where the specific Dex instance (and therefore the
+upstream IDP) a request authenticates against depends on which tenant issuer
+URL the request targets. The operator supports this pattern natively:
+
+- Create one `DexTenant` per tenant. Each `DexTenant` gets its own managed Dex
+  `Deployment`, `Service`, and issuer, and references exactly one
+  `DexConnector` as its upstream IDP. The operator pre-seeds Dex's Kubernetes
+  storage with that connector before the Dex `Deployment` starts, then keeps
+  it in sync afterwards over Dex's gRPC API.
+- Create one `DexClient` with `spec.tenantRefs` instead of `spec.connectionRef`
+  to mount the same OAuth2 client (same `clientID`) onto every listed tenant.
+  A confidential client (`public: false`) mounted this way gets a distinct,
+  operator-generated client secret per tenant mount, recorded in
+  `status.mounts` alongside the per-tenant sync status.
+- The tenant's issuer URL is the routing key: whichever issuer a request
+  authenticates against determines which upstream IDP handles it, since each
+  tenant Dex instance only knows about its own connector.
+
+**Important:** managed tenants currently use Dex's Kubernetes storage
+backend, which scopes all state—including which connectors are available for
+login—to the Kubernetes namespace the Dex `Deployment` runs in. Two
+`DexTenant`s sharing a namespace would therefore share connector storage and
+leak each other's upstream IDPs, defeating the point of per-tenant routing.
+**Each `DexTenant` must run in its own dedicated namespace.** Because of this,
+`spec.tenantRefs` entries on a `DexClient` accept an optional `namespace`
+field (defaulting to the `DexClient`'s own namespace) so a single client can
+mount onto tenants that live in different namespaces. See
+[`config/samples/idp_v1alpha1_dexclient_multitenant.yaml`](config/samples/idp_v1alpha1_dexclient_multitenant.yaml)
+for a complete example with two tenants in two namespaces.
+
+Tenant exposure is Service-only: the operator does not create Ingress or
+Gateway resources, so route the tenant's `spec.issuer` URL to its Service
+using whatever ingress mechanism your cluster uses. Tenant Dex gRPC traffic is
+internal plaintext for this MVP; only reach it from within the cluster.
 
 ## Getting Started
 
@@ -77,6 +122,69 @@ For local development only, the client secret can also be supplied inline:
 spec:
   secret:
     value: change-me
+```
+
+Create a tenant-scoped Dex instance backed by its own upstream OIDC connector:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: tenant-a-oidc-secret
+  namespace: tenant-a
+stringData:
+  clientSecret: change-me
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  name: tenant-a-connector
+  namespace: tenant-a
+spec:
+  connectorID: upstream-oidc
+  type: oidc
+  displayName: Tenant A IDP
+  config:
+    issuer: https://idp-a.example.com
+    clientID: dex
+    clientSecret: ${oidcClientSecret}
+    redirectURI: https://tenant-a.example.com/dex/callback
+  secretRefs:
+    - name: oidcClientSecret
+      valueFrom:
+        secretKeyRef:
+          name: tenant-a-oidc-secret
+          key: clientSecret
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  name: tenant-a
+  namespace: tenant-a # each DexTenant needs its own namespace; see "Multi-tenant routing"
+spec:
+  issuer: https://tenant-a.example.com/dex
+  connectorRef:
+    name: tenant-a-connector
+```
+
+Mount a single OAuth2 client onto multiple tenants, each getting its own
+generated client secret:
+
+```yaml
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexClient
+metadata:
+  name: backend-app
+spec:
+  tenantRefs:
+    - name: tenant-a
+      namespace: tenant-a
+    - name: tenant-b
+      namespace: tenant-b
+  clientID: backend-app
+  redirectURIs:
+    - https://backend.example.com/callback
+  name: Backend App
 ```
 
 For TLS-enabled Dex gRPC endpoints, provide CA and optional mTLS material:
@@ -211,21 +319,49 @@ kubectl apply -f https://raw.githubusercontent.com/<org>/dex-idp-operator/<tag o
 
 ### By providing a Helm Chart
 
-1. Build the chart using the optional helm plugin
+The Helm chart is generated under `dist/chart` and can install the operator
+with or without an in-chart Dex deployment.
+
+Install the operator only and connect it to an externally managed Dex with your
+own `DexConnection` resources:
 
 ```sh
-kubebuilder edit --plugins=helm/v2-alpha
+helm install dex-idp-operator ./dist/chart \
+  --namespace dex-idp-operator-system \
+  --create-namespace \
+  --set manager.image.repository=<some-registry>/dex-idp-operator \
+  --set manager.image.tag=<tag>
 ```
 
-2. See that a chart was generated under 'dist/chart', and users
-can obtain this solution from there.
+Install the operator with a demo Dex deployment:
+
+```sh
+helm install dex-idp-operator ./dist/chart \
+  --namespace dex-idp-operator-system \
+  --create-namespace \
+  --set manager.image.repository=<some-registry>/dex-idp-operator \
+  --set manager.image.tag=<tag> \
+  --set dex.enabled=true
+```
+
+When `dex.enabled=true`, the chart creates a Dex `Deployment`, `Service`,
+`ConfigMap`, and a matching `DexConnection` resource by default. The built-in
+Dex config uses sqlite storage in `/tmp` and a mock connector, which is suitable
+for local development and demos only. For production, either keep `dex.enabled`
+disabled and manage Dex separately, or override `dex.config` with production
+storage, issuer, and connector settings.
+
+The Makefile also includes convenience Helm targets:
+
+```sh
+make helm-deploy IMG=<some-registry>/dex-idp-operator:<tag>
+make helm-uninstall
+```
 
 **NOTE:** If you change the project, you need to update the Helm Chart
-using the same command above to sync the latest changes. Furthermore,
-if you create webhooks, you need to use the above command with
-the '--force' flag and manually ensure that any custom configuration
-previously added to 'dist/chart/values.yaml' or 'dist/chart/manager/manager.yaml'
-is manually re-applied afterwards.
+using `kubebuilder edit --plugins=helm/v2-alpha` to sync the latest generated
+manifests. Preserve any chart customizations, such as the optional Dex templates
+and values, when regenerating.
 
 ## Contributing
 

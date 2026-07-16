@@ -7,16 +7,73 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - secrets
+  - configmaps
+  - serviceaccounts
+  - services
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apiextensions.k8s.io
+  resources:
+  - customresourcedefinitions
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - dex.coreos.com
+  resources:
+  - authcodes
+  - authrequests
+  - connectors
+  - oauth2clients
+  - offlinesessionses
+  - passwords
+  - refreshtokens
+  - signingkeies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - idp.groeneslot.nl
   resources:
   - dexclients
   - dexconnections
+  - dexconnectors
+  - dextenants
   verbs:
   - create
   - delete
@@ -30,6 +87,8 @@ rules:
   resources:
   - dexclients/finalizers
   - dexconnections/finalizers
+  - dexconnectors/finalizers
+  - dextenants/finalizers
   verbs:
   - update
 - apiGroups:
@@ -37,7 +96,22 @@ rules:
   resources:
   - dexclients/status
   - dexconnections/status
+  - dexconnectors/status
+  - dextenants/status
   verbs:
   - get
   - patch
   - update
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - rolebindings
+  - roles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

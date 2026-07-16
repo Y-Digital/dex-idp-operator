@@ -44,8 +44,9 @@ spec:
                 minLength: 1
                 type: string
               connectionRef:
-                description: connectionRef references the DexConnection used to reach
-                  Dex.
+                description: |-
+                  connectionRef references the DexConnection used to reach Dex. Mutually exclusive with
+                  tenantRefs.
                 properties:
                   name:
                     default: ""
@@ -79,7 +80,10 @@ spec:
                   type: string
                 type: array
               secret:
-                description: secret contains the client secret for confidential clients.
+                description: |-
+                  secret contains the client secret for confidential clients. Only valid together with
+                  connectionRef; when tenantRefs is set, the operator generates a distinct secret per
+                  tenant instead.
                 properties:
                   value:
                     description: value is the inline value.
@@ -120,6 +124,35 @@ spec:
                 x-kubernetes-validations:
                 - message: exactly one of value or valueFrom must be set
                   rule: has(self.value) != has(self.valueFrom)
+              tenantRefs:
+                description: |-
+                  tenantRefs mount this client onto multiple tenant-scoped Dex contexts. Each referenced
+                  DexTenant runs its own Dex instance with its own upstream IDP connector, so the same
+                  OAuth2 client can authenticate against different IDPs depending on which tenant issuer
+                  a request targets. Mutually exclusive with connectionRef. Confidential clients
+                  (public=false) mounted this way receive a distinct, operator-generated client secret
+                  per tenant.
+                items:
+                  description: |-
+                    DexTenantReference identifies a DexTenant that a DexClient mounts onto. Dex's Kubernetes
+                    storage backend scopes all state, including which connectors are offered for login, to the
+                    Kubernetes namespace a Dex instance runs in. Isolating one tenant's upstream IDP from
+                    another's therefore requires running each DexTenant in its own namespace, so unlike most
+                    same-object references in this API, tenantRefs must be able to cross namespaces.
+                  properties:
+                    name:
+                      description: name is the name of the referenced DexTenant.
+                      minLength: 1
+                      type: string
+                    namespace:
+                      description: |-
+                        namespace is the namespace of the referenced DexTenant. Defaults to the DexClient's own
+                        namespace when unset.
+                      type: string
+                  required:
+                  - name
+                  type: object
+                type: array
               trustedPeers:
                 description: trustedPeers are Dex client IDs trusted by this client.
                 items:
@@ -127,13 +160,20 @@ spec:
                 type: array
             required:
             - clientID
-            - connectionRef
             type: object
             x-kubernetes-validations:
-            - message: secret is required when public is false
-              rule: (has(self.public) && self.public) || has(self.secret)
+            - message: secret is required when public is false, unless tenantRefs
+                is set
+              rule: (has(self.public) && self.public) || has(self.secret) || (has(self.tenantRefs)
+                && size(self.tenantRefs) > 0)
             - message: secret must not be set when public is true
               rule: '!(has(self.public) && self.public) || !has(self.secret)'
+            - message: exactly one of connectionRef or tenantRefs must be set
+              rule: has(self.connectionRef) != (has(self.tenantRefs) && size(self.tenantRefs)
+                > 0)
+            - message: secret must not be set when tenantRefs is set; the operator
+                generates a distinct secret per tenant
+              rule: '!(has(self.tenantRefs) && size(self.tenantRefs) > 0) || !has(self.secret)'
           status:
             description: status defines the observed state of DexClient
             properties:
@@ -201,6 +241,43 @@ spec:
                 type: array
                 x-kubernetes-list-map-keys:
                 - type
+                x-kubernetes-list-type: map
+              mounts:
+                description: mounts reports the sync status of this client against
+                  each mount target.
+                items:
+                  description: |-
+                    DexClientMountStatus reports the sync status of a DexClient against one mount target,
+                    either the single connectionRef target or one entry from tenantRefs.
+                  properties:
+                    message:
+                      description: message is a human-readable message describing
+                        the current status.
+                      type: string
+                    ready:
+                      description: ready reports whether this target is synced with
+                        Dex.
+                      type: boolean
+                    reason:
+                      description: reason is a short machine-readable reason for the
+                        current status.
+                      type: string
+                    secretRef:
+                      description: |-
+                        secretRef is the name of the Secret holding the client secret used for this target,
+                        when applicable.
+                      type: string
+                    target:
+                      description: |-
+                        target identifies the mount target, formatted as "connection:<name>" or
+                        "tenant:<namespace>/<name>".
+                      type: string
+                  required:
+                  - target
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - target
                 x-kubernetes-list-type: map
               observedGeneration:
                 description: observedGeneration is the last generation observed by

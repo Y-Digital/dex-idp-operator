@@ -22,6 +22,12 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the dex-idp-operator itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- dextenant_admin_role.yaml
+- dextenant_editor_role.yaml
+- dextenant_viewer_role.yaml
+- dexconnector_admin_role.yaml
+- dexconnector_editor_role.yaml
+- dexconnector_viewer_role.yaml
 - dexclient_admin_role.yaml
 - dexclient_editor_role.yaml
 - dexclient_viewer_role.yaml

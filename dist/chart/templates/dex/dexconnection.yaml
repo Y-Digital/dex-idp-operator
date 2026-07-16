@@ -1,0 +1,21 @@
+{{- if and .Values.dex.enabled .Values.dex.dexConnection.create }}
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnection
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: {{ include "dex-idp-operator.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: dex
+    {{- with .Values.dex.labels }}
+    {{- with omit . "app.kubernetes.io/managed-by" "app.kubernetes.io/name" "helm.sh/chart" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  name: {{ include "dex-idp-operator.dexConnectionName" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  address: {{ include "dex-idp-operator.dexName" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.dex.service.grpcPort }}
+  plaintext: true
+{{- end }}

@@ -2,4 +2,7 @@
 resources:
 - idp_v1alpha1_dexconnection.yaml
 - idp_v1alpha1_dexclient.yaml
+- idp_v1alpha1_dexconnector.yaml
+- idp_v1alpha1_dextenant.yaml
+- idp_v1alpha1_dexclient_multitenant.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

@@ -1,0 +1,36 @@
+{{- if .Values.dex.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/name: {{ include "dex-idp-operator.name" . }}
+    helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: dex
+    {{- with .Values.dex.labels }}
+    {{- with omit . "app.kubernetes.io/managed-by" "app.kubernetes.io/name" "helm.sh/chart" "app.kubernetes.io/instance" "app.kubernetes.io/component" }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  {{- with .Values.dex.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  name: {{ include "dex-idp-operator.dexName" . }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  type: {{ .Values.dex.service.type }}
+  ports:
+  - name: http
+    port: {{ .Values.dex.service.httpPort }}
+    protocol: TCP
+    targetPort: http
+  - name: grpc
+    port: {{ .Values.dex.service.grpcPort }}
+    protocol: TCP
+    targetPort: grpc
+  selector:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/component: dex
+{{- end }}

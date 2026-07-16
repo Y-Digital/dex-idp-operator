@@ -1,0 +1,14 @@
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dextenant-sample
+spec:
+  # issuer must be externally reachable; the operator only creates a Service, so an
+  # Ingress/Gateway route pointing at that Service must be configured separately.
+  issuer: https://dextenant-sample.example.com/dex
+  connectorRef:
+    name: dexconnector-sample
+  replicas: 1

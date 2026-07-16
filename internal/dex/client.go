@@ -40,12 +40,16 @@ var (
 	ErrAlreadyExists = errors.New("dex resource already exists")
 )
 
-// Client manages Dex OAuth2 clients.
+// Client manages Dex OAuth2 clients and connectors.
 type Client interface {
 	GetClient(ctx context.Context, id string) (*dexapi.Client, error)
 	CreateClient(ctx context.Context, client *dexapi.Client) (*dexapi.Client, error)
 	UpdateClient(ctx context.Context, req *dexapi.UpdateClientReq) error
 	DeleteClient(ctx context.Context, id string) error
+	GetVersion(ctx context.Context) (*dexapi.VersionResp, error)
+	CreateConnector(ctx context.Context, connector *dexapi.Connector) error
+	UpdateConnector(ctx context.Context, req *dexapi.UpdateConnectorReq) error
+	DeleteConnector(ctx context.Context, id string) error
 	Close() error
 }
 
@@ -136,6 +140,47 @@ func (c *grpcClient) DeleteClient(ctx context.Context, id string) error {
 	resp, err := c.api.DeleteClient(ctx, &dexapi.DeleteClientReq{Id: id})
 	if err != nil {
 		return fmt.Errorf("delete dex client: %w", err)
+	}
+	if resp.GetNotFound() {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (c *grpcClient) GetVersion(ctx context.Context) (*dexapi.VersionResp, error) {
+	resp, err := c.api.GetVersion(ctx, &dexapi.VersionReq{})
+	if err != nil {
+		return nil, fmt.Errorf("get dex version: %w", err)
+	}
+	return resp, nil
+}
+
+func (c *grpcClient) CreateConnector(ctx context.Context, connector *dexapi.Connector) error {
+	resp, err := c.api.CreateConnector(ctx, &dexapi.CreateConnectorReq{Connector: connector})
+	if err != nil {
+		return fmt.Errorf("create dex connector: %w", err)
+	}
+	if resp.GetAlreadyExists() {
+		return ErrAlreadyExists
+	}
+	return nil
+}
+
+func (c *grpcClient) UpdateConnector(ctx context.Context, req *dexapi.UpdateConnectorReq) error {
+	resp, err := c.api.UpdateConnector(ctx, req)
+	if err != nil {
+		return fmt.Errorf("update dex connector: %w", err)
+	}
+	if resp.GetNotFound() {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func (c *grpcClient) DeleteConnector(ctx context.Context, id string) error {
+	resp, err := c.api.DeleteConnector(ctx, &dexapi.DeleteConnectorReq{Id: id})
+	if err != nil {
+		return fmt.Errorf("delete dex connector: %w", err)
 	}
 	if resp.GetNotFound() {
 		return ErrNotFound

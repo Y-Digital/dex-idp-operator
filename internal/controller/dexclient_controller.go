@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"reflect"
@@ -41,9 +43,15 @@ import (
 	"groeneslot.nl/dex-idp-operator/internal/dex"
 )
 
-const dexClientFinalizer = "idp.groeneslot.nl/dex-client"
+const (
+	dexClientFinalizer = "idp.groeneslot.nl/dex-client"
+	// generatedSecretKey is the Secret data key used for operator-generated client secrets.
+	generatedSecretKey = "client-secret"
 
-var errReconciliationBlocked = errors.New("dex client reconciliation blocked")
+	reasonSynced         = "Synced"
+	messageClientSynced  = "Dex client is synced"
+	reasonDexUnavailable = "DexUnavailable"
+)
 
 // DexClientFactory creates a Dex client from resolved connection settings.
 type DexClientFactory func(context.Context, dex.DialConfig) (dex.Client, error)
@@ -55,11 +63,26 @@ type DexClientReconciler struct {
 	ClientFactory DexClientFactory
 }
 
+// dexTarget is one resolved Dex instance a DexClient must be synced against, either the
+// single connectionRef target or one entry from tenantRefs.
+type dexTarget struct {
+	// Key identifies the target, formatted as "connection:<name>" or "tenant:<name>".
+	Key string
+	// DialConfig is nil when ResolveErr is set.
+	DialConfig *dex.DialConfig
+	Secret     string
+	// SecretRefName is the name of the generated Secret backing Secret, when applicable.
+	SecretRefName string
+	// ResolveErr is set when the target's DexConnection/DexTenant could not be resolved.
+	ResolveErr error
+}
+
 // +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients/finalizers,verbs=update
 // +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnections,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dextenants,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to
 // move the current state of the cluster closer to the desired state.
@@ -85,51 +108,51 @@ func (r *DexClientReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{Requeue: true}, nil
 	}
 
-	dexConnection := &idpv1alpha1.DexConnection{}
-	connectionKey := types.NamespacedName{
-		Namespace: dexClient.Namespace,
-		Name:      dexClient.Spec.ConnectionRef.Name,
+	targets := r.resolveTargets(ctx, dexClient, true)
+
+	mounts := make([]idpv1alpha1.DexClientMountStatus, 0, len(targets))
+	var errs []error
+	allReady := true
+	anyBlocked := false
+
+	for _, target := range targets {
+		mountStatus := idpv1alpha1.DexClientMountStatus{Target: target.Key, SecretRef: target.SecretRefName}
+
+		if target.ResolveErr != nil {
+			mountStatus.Reason = "ResolveFailed"
+			mountStatus.Message = target.ResolveErr.Error()
+			mounts = append(mounts, mountStatus)
+			allReady = false
+			errs = append(errs, target.ResolveErr)
+			continue
+		}
+
+		ready, blocked, reason, message, applyErr := r.applyToTarget(ctx, dexClient, target)
+		mountStatus.Ready = ready
+		mountStatus.Reason = reason
+		mountStatus.Message = message
+		mounts = append(mounts, mountStatus)
+		if blocked {
+			anyBlocked = true
+		}
+		if !ready {
+			allReady = false
+		}
+		if applyErr != nil {
+			errs = append(errs, applyErr)
+		}
 	}
-	if err := r.Get(ctx, connectionKey, dexConnection); err != nil {
-		statusErr := r.setFailureStatus(ctx, dexClient, "ConnectionNotFound", err.Error())
-		if statusErr != nil {
-			return ctrl.Result{}, statusErr
-		}
-		if apierrors.IsNotFound(err) {
-			return ctrl.Result{}, nil
-		}
+
+	if err := r.setMountStatus(ctx, dexClient, mounts, allReady, anyBlocked); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	cfg, err := r.dialConfig(ctx, dexClient.Namespace, dexConnection)
-	if err != nil {
-		return ctrl.Result{}, r.statusError(ctx, dexClient, "ConnectionInvalid", err)
+	if len(errs) > 0 {
+		return ctrl.Result{}, errors.Join(errs...)
 	}
 
-	desired, err := r.desiredDexClient(ctx, dexClient)
-	if err != nil {
-		return ctrl.Result{}, r.statusError(ctx, dexClient, "SecretInvalid", err)
-	}
-
-	dexAPI, err := r.newDexClient(ctx, cfg)
-	if err != nil {
-		return ctrl.Result{}, r.statusError(ctx, dexClient, "DexUnavailable", err)
-	}
-	defer func() {
-		if closeErr := dexAPI.Close(); closeErr != nil {
-			log.Error(closeErr, "Failed to close Dex client")
-		}
-	}()
-
-	if err := r.applyDexClient(ctx, dexAPI, dexClient, desired); err != nil {
-		if errors.Is(err, errReconciliationBlocked) {
-			return ctrl.Result{}, nil
-		}
-		return ctrl.Result{}, err
-	}
-
-	log.Info("Synced Dex client", "clientID", dexClient.Spec.ClientID)
-	return ctrl.Result{}, r.setSuccessStatus(ctx, dexClient)
+	log.Info("Synced Dex client", "clientID", dexClient.Spec.ClientID, "mounts", len(mounts))
+	return ctrl.Result{}, nil
 }
 
 func (r *DexClientReconciler) reconcileDelete(ctx context.Context, dexClient *idpv1alpha1.DexClient) (ctrl.Result, error) {
@@ -137,101 +160,304 @@ func (r *DexClientReconciler) reconcileDelete(ctx context.Context, dexClient *id
 		return ctrl.Result{}, nil
 	}
 
-	dexConnection := &idpv1alpha1.DexConnection{}
-	connectionKey := types.NamespacedName{
-		Namespace: dexClient.Namespace,
-		Name:      dexClient.Spec.ConnectionRef.Name,
-	}
-	if err := r.Get(ctx, connectionKey, dexConnection); err != nil {
-		if apierrors.IsNotFound(err) {
-			controllerutil.RemoveFinalizer(dexClient, dexClientFinalizer)
-			return ctrl.Result{}, r.Update(ctx, dexClient)
+	targets := r.resolveTargets(ctx, dexClient, false)
+
+	for _, target := range targets {
+		if target.ResolveErr != nil || target.DialConfig == nil {
+			// The target's Dex is unreachable or already gone; nothing to clean up there.
+			continue
 		}
-		return ctrl.Result{}, err
-	}
-
-	cfg, err := r.dialConfig(ctx, dexClient.Namespace, dexConnection)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	dexAPI, err := r.newDexClient(ctx, cfg)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	defer dexAPI.Close() //nolint:errcheck
-
-	if err := dexAPI.DeleteClient(ctx, dexClient.Spec.ClientID); err != nil && !errors.Is(err, dex.ErrNotFound) {
-		return ctrl.Result{}, err
+		if err := r.deleteFromTarget(ctx, *target.DialConfig, dexClient.Spec.ClientID); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	controllerutil.RemoveFinalizer(dexClient, dexClientFinalizer)
 	return ctrl.Result{}, r.Update(ctx, dexClient)
 }
 
-func (r *DexClientReconciler) applyDexClient(
-	ctx context.Context,
-	dexAPI dex.Client,
-	dexClient *idpv1alpha1.DexClient,
-	desired *dexapi.Client,
-) error {
-	existing, err := dexAPI.GetClient(ctx, desired.GetId())
-	if errors.Is(err, dex.ErrNotFound) {
-		_, createErr := dexAPI.CreateClient(ctx, desired)
-		if errors.Is(createErr, dex.ErrAlreadyExists) {
-			return r.updateExistingDexClient(ctx, dexAPI, dexClient, desired)
-		}
-		return createErr
-	}
+func (r *DexClientReconciler) deleteFromTarget(ctx context.Context, cfg dex.DialConfig, clientID string) error {
+	dexAPI, err := r.newDexClient(ctx, cfg)
 	if err != nil {
-		return r.statusError(ctx, dexClient, "DexUnavailable", err)
+		return err
+	}
+	defer dexAPI.Close() //nolint:errcheck
+
+	if err := dexAPI.DeleteClient(ctx, clientID); err != nil && !errors.Is(err, dex.ErrNotFound) {
+		return err
+	}
+	return nil
+}
+
+// resolveTargets resolves every mount target declared by dexClient. Individual target
+// resolution failures are recorded on the returned dexTarget rather than aborting the whole
+// call, so one broken tenant does not prevent syncing the client onto the others.
+func (r *DexClientReconciler) resolveTargets(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	includeSecrets bool,
+) []dexTarget {
+	if dexClient.Spec.ConnectionRef != nil {
+		return []dexTarget{r.resolveConnectionTarget(ctx, dexClient, dexClient.Spec.ConnectionRef.Name, includeSecrets)}
+	}
+
+	targets := make([]dexTarget, 0, len(dexClient.Spec.TenantRefs))
+	for _, ref := range dexClient.Spec.TenantRefs {
+		targets = append(targets, r.resolveTenantTarget(ctx, dexClient, ref, includeSecrets))
+	}
+	return targets
+}
+
+func (r *DexClientReconciler) resolveConnectionTarget(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	connectionName string,
+	includeSecrets bool,
+) dexTarget {
+	key := "connection:" + connectionName
+
+	dexConnection := &idpv1alpha1.DexConnection{}
+	connectionKey := types.NamespacedName{Namespace: dexClient.Namespace, Name: connectionName}
+	if err := r.Get(ctx, connectionKey, dexConnection); err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("get DexConnection %q: %w", connectionName, err)}
+	}
+
+	cfg, err := r.dialConfig(ctx, dexClient.Namespace, dexConnection)
+	if err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("build dial config for DexConnection %q: %w", connectionName, err)}
+	}
+
+	if !includeSecrets {
+		return dexTarget{Key: key, DialConfig: &cfg}
+	}
+
+	secret, err := r.resolveClientSecret(ctx, dexClient)
+	if err != nil {
+		return dexTarget{Key: key, ResolveErr: err}
+	}
+	return dexTarget{Key: key, DialConfig: &cfg, Secret: secret}
+}
+
+// resolveTenantTarget resolves one tenantRefs entry. tenantNamespace defaults to the
+// DexClient's own namespace when the reference does not set an explicit namespace, since
+// each DexTenant is expected to run in its own dedicated namespace (see DexTenantReference).
+func (r *DexClientReconciler) resolveTenantTarget(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	ref idpv1alpha1.DexTenantReference,
+	includeSecrets bool,
+) dexTarget {
+	tenantNamespace := ref.Namespace
+	if tenantNamespace == "" {
+		tenantNamespace = dexClient.Namespace
+	}
+	key := "tenant:" + tenantNamespace + "/" + ref.Name
+
+	tenant := &idpv1alpha1.DexTenant{}
+	if err := r.Get(ctx, types.NamespacedName{Namespace: tenantNamespace, Name: ref.Name}, tenant); err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("get DexTenant %q: %w", key, err)}
+	}
+	if tenant.Status.ConnectionRef == "" {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("DexTenant %q does not have a ready Dex connection yet", key)}
+	}
+
+	dexConnection := &idpv1alpha1.DexConnection{}
+	connectionKey := types.NamespacedName{Namespace: tenantNamespace, Name: tenant.Status.ConnectionRef}
+	if err := r.Get(ctx, connectionKey, dexConnection); err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf(
+			"get DexConnection %q for DexTenant %q: %w", tenant.Status.ConnectionRef, key, err)}
+	}
+
+	cfg, err := r.dialConfig(ctx, tenantNamespace, dexConnection)
+	if err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("build dial config for DexTenant %q: %w", key, err)}
+	}
+
+	if !includeSecrets {
+		return dexTarget{Key: key, DialConfig: &cfg}
+	}
+
+	if dexClient.Spec.Public {
+		return dexTarget{Key: key, DialConfig: &cfg}
+	}
+
+	secretRefName := generatedSecretName(dexClient.Name, ref.Name, tenantNamespace, dexClient.Namespace)
+	secretValue, err := r.ensureGeneratedSecret(ctx, dexClient, secretRefName)
+	if err != nil {
+		return dexTarget{Key: key, ResolveErr: fmt.Errorf("ensure client secret for DexTenant %q: %w", key, err)}
+	}
+	return dexTarget{Key: key, DialConfig: &cfg, Secret: secretValue, SecretRefName: secretRefName}
+}
+
+// generatedSecretName builds the name of the operator-generated per-tenant client Secret,
+// which always lives in the DexClient's own namespace. The tenant namespace is only included
+// when it differs from the DexClient's namespace, keeping the common same-namespace case
+// readable while still avoiding collisions across cross-namespace mounts of the same tenant
+// name.
+func generatedSecretName(dexClientName, tenantName, tenantNamespace, dexClientNamespace string) string {
+	if tenantNamespace == dexClientNamespace {
+		return fmt.Sprintf("%s-%s-secret", dexClientName, tenantName)
+	}
+	return fmt.Sprintf("%s-%s-%s-secret", dexClientName, tenantNamespace, tenantName)
+}
+
+func (r *DexClientReconciler) resolveClientSecret(ctx context.Context, dexClient *idpv1alpha1.DexClient) (string, error) {
+	if dexClient.Spec.Public {
+		return "", nil
+	}
+	value, err := resolveValueSource(ctx, r.Client, dexClient.Namespace, dexClient.Spec.Secret)
+	if err != nil {
+		return "", err
+	}
+	return string(value), nil
+}
+
+// ensureGeneratedSecret returns the client secret value stored in the named Secret, creating
+// it with a freshly generated random value owned by dexClient if it does not already exist.
+// The generated value is never modified once created, so it stays stable across reconciles.
+func (r *DexClientReconciler) ensureGeneratedSecret(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	name string,
+) (string, error) {
+	secret := &corev1.Secret{}
+	key := types.NamespacedName{Namespace: dexClient.Namespace, Name: name}
+	err := r.Get(ctx, key, secret)
+	switch {
+	case err == nil:
+		value, ok := secret.Data[generatedSecretKey]
+		if !ok {
+			return "", fmt.Errorf("secret %q does not contain key %q", name, generatedSecretKey)
+		}
+		return string(value), nil
+	case apierrors.IsNotFound(err):
+		return r.createGeneratedSecret(ctx, dexClient, name)
+	default:
+		return "", err
+	}
+}
+
+func (r *DexClientReconciler) createGeneratedSecret(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	name string,
+) (string, error) {
+	value, err := generateClientSecret()
+	if err != nil {
+		return "", err
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: dexClient.Namespace,
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{generatedSecretKey: []byte(value)},
+	}
+	if err := controllerutil.SetControllerReference(dexClient, secret, r.Scheme); err != nil {
+		return "", err
+	}
+	if err := r.Create(ctx, secret); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return r.ensureGeneratedSecret(ctx, dexClient, name)
+		}
+		return "", err
+	}
+	return value, nil
+}
+
+func generateClientSecret() (string, error) {
+	buf := make([]byte, 32)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate client secret: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+// applyToTarget syncs dexClient onto one resolved target and reports its resulting mount
+// status without writing to the DexClient's status subresource itself.
+func (r *DexClientReconciler) applyToTarget(
+	ctx context.Context,
+	dexClient *idpv1alpha1.DexClient,
+	target dexTarget,
+) (ready, blocked bool, reason, message string, err error) {
+	desired := &dexapi.Client{
+		Id:           dexClient.Spec.ClientID,
+		Secret:       target.Secret,
+		RedirectUris: dexClient.Spec.RedirectURIs,
+		TrustedPeers: dexClient.Spec.TrustedPeers,
+		Public:       dexClient.Spec.Public,
+		Name:         dexClient.Spec.Name,
+		LogoUrl:      dexClient.Spec.LogoURL,
+	}
+
+	dexAPI, dialErr := r.newDexClient(ctx, *target.DialConfig)
+	if dialErr != nil {
+		return false, false, reasonDexUnavailable, dialErr.Error(), dialErr
+	}
+	defer func() {
+		if closeErr := dexAPI.Close(); closeErr != nil {
+			logf.FromContext(ctx).Error(closeErr, "Failed to close Dex client")
+		}
+	}()
+
+	existing, getErr := dexAPI.GetClient(ctx, desired.GetId())
+	if errors.Is(getErr, dex.ErrNotFound) {
+		if _, createErr := dexAPI.CreateClient(ctx, desired); createErr != nil {
+			if errors.Is(createErr, dex.ErrAlreadyExists) {
+				ready, reason, message, err := r.updateDexClient(ctx, dexAPI, desired)
+				return ready, false, reason, message, err
+			}
+			return false, false, "DexCreateFailed", createErr.Error(), createErr
+		}
+		return true, false, reasonSynced, messageClientSynced, nil
+	}
+	if getErr != nil {
+		return false, false, reasonDexUnavailable, getErr.Error(), getErr
 	}
 
 	if immutableChanged(existing, desired) {
 		if !dexClient.Spec.RecreateOnImmutableChange {
-			if err := r.setBlockedStatus(ctx, dexClient, "ImmutableChangeBlocked",
-				"Requested Dex client secret or public setting changed; set recreateOnImmutableChange to recreate it"); err != nil {
-				return err
-			}
-			return errReconciliationBlocked
+			return false, true, "ImmutableChangeBlocked",
+				"Requested Dex client secret or public setting changed; set recreateOnImmutableChange to recreate it", nil
 		}
-		if err := dexAPI.DeleteClient(ctx, desired.GetId()); err != nil && !errors.Is(err, dex.ErrNotFound) {
-			return r.statusError(ctx, dexClient, "DexDeleteFailed", err)
+		if delErr := dexAPI.DeleteClient(ctx, desired.GetId()); delErr != nil && !errors.Is(delErr, dex.ErrNotFound) {
+			return false, false, "DexDeleteFailed", delErr.Error(), delErr
 		}
-		_, err = dexAPI.CreateClient(ctx, desired)
-		if err != nil {
-			return r.statusError(ctx, dexClient, "DexCreateFailed", err)
+		if _, createErr := dexAPI.CreateClient(ctx, desired); createErr != nil {
+			return false, false, "DexCreateFailed", createErr.Error(), createErr
 		}
-		return nil
+		return true, false, reasonSynced, messageClientSynced, nil
 	}
 
 	if !mutableChanged(existing, desired) {
-		return nil
+		return true, false, reasonSynced, messageClientSynced, nil
 	}
 
-	return r.updateExistingDexClient(ctx, dexAPI, dexClient, desired)
+	ready, reason, message, err = r.updateDexClient(ctx, dexAPI, desired)
+	return ready, false, reason, message, err
 }
 
-func (r *DexClientReconciler) updateExistingDexClient(
+func (r *DexClientReconciler) updateDexClient(
 	ctx context.Context,
 	dexAPI dex.Client,
-	dexClient *idpv1alpha1.DexClient,
 	desired *dexapi.Client,
-) error {
-	err := dexAPI.UpdateClient(ctx, &dexapi.UpdateClientReq{
+) (ready bool, reason, message string, err error) {
+	updateErr := dexAPI.UpdateClient(ctx, &dexapi.UpdateClientReq{
 		Id:           desired.GetId(),
 		RedirectUris: desired.GetRedirectUris(),
 		TrustedPeers: desired.GetTrustedPeers(),
 		Name:         desired.GetName(),
 		LogoUrl:      desired.GetLogoUrl(),
 	})
-	if errors.Is(err, dex.ErrNotFound) {
-		_, err = dexAPI.CreateClient(ctx, desired)
+	if errors.Is(updateErr, dex.ErrNotFound) {
+		_, updateErr = dexAPI.CreateClient(ctx, desired)
 	}
-	if err != nil {
-		return r.statusError(ctx, dexClient, "DexUpdateFailed", err)
+	if updateErr != nil {
+		return false, "DexUpdateFailed", updateErr.Error(), updateErr
 	}
-	return nil
+	return true, reasonSynced, messageClientSynced, nil
 }
 
 func (r *DexClientReconciler) newDexClient(ctx context.Context, cfg dex.DialConfig) (dex.Client, error) {
@@ -240,27 +466,6 @@ func (r *DexClientReconciler) newDexClient(ctx context.Context, cfg dex.DialConf
 		factory = dex.Dial
 	}
 	return factory(ctx, cfg)
-}
-
-func (r *DexClientReconciler) desiredDexClient(ctx context.Context, dexClient *idpv1alpha1.DexClient) (*dexapi.Client, error) {
-	var secret string
-	if !dexClient.Spec.Public {
-		value, err := r.resolveValue(ctx, dexClient.Namespace, dexClient.Spec.Secret)
-		if err != nil {
-			return nil, err
-		}
-		secret = string(value)
-	}
-
-	return &dexapi.Client{
-		Id:           dexClient.Spec.ClientID,
-		Secret:       secret,
-		RedirectUris: dexClient.Spec.RedirectURIs,
-		TrustedPeers: dexClient.Spec.TrustedPeers,
-		Public:       dexClient.Spec.Public,
-		Name:         dexClient.Spec.Name,
-		LogoUrl:      dexClient.Spec.LogoURL,
-	}, nil
 }
 
 func (r *DexClientReconciler) dialConfig(
@@ -282,17 +487,17 @@ func (r *DexClientReconciler) dialConfig(
 
 	var err error
 	if tlsSpec.CA != nil {
-		cfg.TLS.CACertPEM, err = r.resolveValue(ctx, namespace, tlsSpec.CA)
+		cfg.TLS.CACertPEM, err = resolveValueSource(ctx, r.Client, namespace, tlsSpec.CA)
 		if err != nil {
 			return cfg, err
 		}
 	}
 	if tlsSpec.ClientCertificate != nil {
-		cfg.TLS.ClientCertPEM, err = r.resolveValue(ctx, namespace, &tlsSpec.ClientCertificate.Certificate)
+		cfg.TLS.ClientCertPEM, err = resolveValueSource(ctx, r.Client, namespace, &tlsSpec.ClientCertificate.Certificate)
 		if err != nil {
 			return cfg, err
 		}
-		cfg.TLS.ClientKeyPEM, err = r.resolveValue(ctx, namespace, &tlsSpec.ClientCertificate.PrivateKey)
+		cfg.TLS.ClientKeyPEM, err = resolveValueSource(ctx, r.Client, namespace, &tlsSpec.ClientCertificate.PrivateKey)
 		if err != nil {
 			return cfg, err
 		}
@@ -301,131 +506,53 @@ func (r *DexClientReconciler) dialConfig(
 	return cfg, nil
 }
 
-func (r *DexClientReconciler) resolveValue(
-	ctx context.Context,
-	namespace string,
-	source *idpv1alpha1.ValueSource,
-) ([]byte, error) {
-	if source == nil {
-		return nil, fmt.Errorf("value source is required")
-	}
-	if source.Value != nil {
-		return []byte(*source.Value), nil
-	}
-	if source.ValueFrom == nil {
-		return nil, fmt.Errorf("value or valueFrom is required")
-	}
-
-	ref := source.ValueFrom.SecretKeyRef
-	secret := &corev1.Secret{}
-	key := types.NamespacedName{Namespace: namespace, Name: ref.Name}
-	if err := r.Get(ctx, key, secret); err != nil {
-		if apierrors.IsNotFound(err) && ref.Optional != nil && *ref.Optional {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	value, ok := secret.Data[ref.Key]
-	if !ok {
-		if ref.Optional != nil && *ref.Optional {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("secret %q does not contain key %q", ref.Name, ref.Key)
-	}
-
-	return value, nil
-}
-
-func (r *DexClientReconciler) statusError(
+// setMountStatus records the per-target mount results and the aggregated Ready, Synced, and
+// Blocked conditions in a single status update.
+func (r *DexClientReconciler) setMountStatus(
 	ctx context.Context,
 	dexClient *idpv1alpha1.DexClient,
-	reason string,
-	err error,
-) error {
-	if statusErr := r.setFailureStatus(ctx, dexClient, reason, err.Error()); statusErr != nil {
-		return statusErr
-	}
-	return err
-}
-
-func (r *DexClientReconciler) setSuccessStatus(ctx context.Context, dexClient *idpv1alpha1.DexClient) error {
-	patch := client.MergeFrom(dexClient.DeepCopy())
-	dexClient.Status.ObservedGeneration = dexClient.Generation
-	dexClient.Status.ClientID = dexClient.Spec.ClientID
-	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
-		Type:               idpv1alpha1.ConditionReady,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: dexClient.Generation,
-		Reason:             "Synced",
-		Message:            "Dex client is synced",
-	})
-	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
-		Type:               idpv1alpha1.ConditionSynced,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: dexClient.Generation,
-		Reason:             "Synced",
-		Message:            "Dex client is synced",
-	})
-	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
-		Type:               idpv1alpha1.ConditionBlocked,
-		Status:             metav1.ConditionFalse,
-		ObservedGeneration: dexClient.Generation,
-		Reason:             "NotBlocked",
-		Message:            "Dex client reconciliation is not blocked",
-	})
-	return r.Status().Patch(ctx, dexClient, patch)
-}
-
-func (r *DexClientReconciler) setFailureStatus(
-	ctx context.Context,
-	dexClient *idpv1alpha1.DexClient,
-	reason string,
-	message string,
+	mounts []idpv1alpha1.DexClientMountStatus,
+	allReady bool,
+	anyBlocked bool,
 ) error {
 	patch := client.MergeFrom(dexClient.DeepCopy())
 	dexClient.Status.ObservedGeneration = dexClient.Generation
 	dexClient.Status.ClientID = dexClient.Spec.ClientID
+	dexClient.Status.Mounts = mounts
+
+	readyStatus, reason, message := metav1.ConditionFalse, "SyncFailed", "One or more Dex client mounts failed to sync"
+	if allReady {
+		readyStatus, reason, message = metav1.ConditionTrue, reasonSynced, messageClientSynced
+	}
 	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
 		Type:               idpv1alpha1.ConditionReady,
-		Status:             metav1.ConditionFalse,
+		Status:             readyStatus,
 		ObservedGeneration: dexClient.Generation,
 		Reason:             reason,
 		Message:            message,
 	})
 	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
 		Type:               idpv1alpha1.ConditionSynced,
-		Status:             metav1.ConditionFalse,
+		Status:             readyStatus,
 		ObservedGeneration: dexClient.Generation,
 		Reason:             reason,
 		Message:            message,
 	})
-	return r.Status().Patch(ctx, dexClient, patch)
-}
 
-func (r *DexClientReconciler) setBlockedStatus(
-	ctx context.Context,
-	dexClient *idpv1alpha1.DexClient,
-	reason string,
-	message string,
-) error {
-	if err := r.setFailureStatus(ctx, dexClient, reason, message); err != nil {
-		return err
+	blockedStatus, blockedReason, blockedMessage := metav1.ConditionFalse, "NotBlocked", "Dex client reconciliation is not blocked"
+	if anyBlocked {
+		blockedStatus, blockedReason, blockedMessage = metav1.ConditionTrue, "ImmutableChangeBlocked",
+			"One or more mounts have an unsafe immutable change; set recreateOnImmutableChange to recreate them"
 	}
-
-	latest := &idpv1alpha1.DexClient{}
-	if err := r.Get(ctx, client.ObjectKeyFromObject(dexClient), latest); err != nil {
-		return err
-	}
-	patch := client.MergeFrom(latest.DeepCopy())
-	meta.SetStatusCondition(&latest.Status.Conditions, metav1.Condition{
+	meta.SetStatusCondition(&dexClient.Status.Conditions, metav1.Condition{
 		Type:               idpv1alpha1.ConditionBlocked,
-		Status:             metav1.ConditionTrue,
-		ObservedGeneration: latest.Generation,
-		Reason:             reason,
-		Message:            message,
+		Status:             blockedStatus,
+		ObservedGeneration: dexClient.Generation,
+		Reason:             blockedReason,
+		Message:            blockedMessage,
 	})
-	return r.Status().Patch(ctx, latest, patch)
+
+	return r.Status().Patch(ctx, dexClient, patch)
 }
 
 func immutableChanged(existing, desired *dexapi.Client) bool {
@@ -444,6 +571,7 @@ func (r *DexClientReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&idpv1alpha1.DexClient{}).
 		Watches(&idpv1alpha1.DexConnection{}, handler.EnqueueRequestsFromMapFunc(r.dexClientsForConnection)).
+		Watches(&idpv1alpha1.DexTenant{}, handler.EnqueueRequestsFromMapFunc(r.dexClientsForTenant)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.dexClientsForSecret)).
 		Named("dexclient").
 		Complete(r)
@@ -457,13 +585,43 @@ func (r *DexClientReconciler) dexClientsForConnection(ctx context.Context, objec
 
 	requests := make([]reconcile.Request, 0, len(dexClients.Items))
 	for _, item := range dexClients.Items {
-		if item.Spec.ConnectionRef.Name == object.GetName() {
+		if item.Spec.ConnectionRef != nil && item.Spec.ConnectionRef.Name == object.GetName() {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{
 					Namespace: item.Namespace,
 					Name:      item.Name,
 				},
 			})
+		}
+	}
+	return requests
+}
+
+// dexClientsForTenant maps a changed DexTenant to the DexClients that mount onto it. Since
+// tenantRefs can cross namespaces, this must search DexClients cluster-wide rather than only
+// within the changed DexTenant's namespace.
+func (r *DexClientReconciler) dexClientsForTenant(ctx context.Context, object client.Object) []reconcile.Request {
+	dexClients := &idpv1alpha1.DexClientList{}
+	if err := r.List(ctx, dexClients); err != nil {
+		return nil
+	}
+
+	requests := make([]reconcile.Request, 0, len(dexClients.Items))
+	for _, item := range dexClients.Items {
+		for _, ref := range item.Spec.TenantRefs {
+			tenantNamespace := ref.Namespace
+			if tenantNamespace == "" {
+				tenantNamespace = item.Namespace
+			}
+			if ref.Name == object.GetName() && tenantNamespace == object.GetNamespace() {
+				requests = append(requests, reconcile.Request{
+					NamespacedName: types.NamespacedName{
+						Namespace: item.Namespace,
+						Name:      item.Name,
+					},
+				})
+				break
+			}
 		}
 	}
 	return requests
@@ -482,6 +640,9 @@ func (r *DexClientReconciler) dexClientsForSecret(ctx context.Context, object cl
 			continue
 		}
 
+		if item.Spec.ConnectionRef == nil {
+			continue
+		}
 		connection := &idpv1alpha1.DexConnection{}
 		key := types.NamespacedName{Namespace: item.Namespace, Name: item.Spec.ConnectionRef.Name}
 		if err := r.Get(ctx, key, connection); err != nil {
@@ -514,10 +675,4 @@ func dexConnectionReferencesSecret(connection *idpv1alpha1.DexConnection, secret
 	return clientCert != nil &&
 		(valueSourceReferencesSecret(&clientCert.Certificate, secretName) ||
 			valueSourceReferencesSecret(&clientCert.PrivateKey, secretName))
-}
-
-func valueSourceReferencesSecret(source *idpv1alpha1.ValueSource, secretName string) bool {
-	return source != nil &&
-		source.ValueFrom != nil &&
-		source.ValueFrom.SecretKeyRef.Name == secretName
 }

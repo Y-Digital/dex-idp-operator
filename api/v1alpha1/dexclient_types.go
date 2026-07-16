@@ -30,19 +30,33 @@ const (
 )
 
 // DexClientSpec defines the desired Dex OAuth2 client.
-// +kubebuilder:validation:XValidation:rule="(has(self.public) && self.public) || has(self.secret)",message="secret is required when public is false"
+// +kubebuilder:validation:XValidation:rule="(has(self.public) && self.public) || has(self.secret) || (has(self.tenantRefs) && size(self.tenantRefs) > 0)",message="secret is required when public is false, unless tenantRefs is set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.public) && self.public) || !has(self.secret)",message="secret must not be set when public is true"
+// +kubebuilder:validation:XValidation:rule="has(self.connectionRef) != (has(self.tenantRefs) && size(self.tenantRefs) > 0)",message="exactly one of connectionRef or tenantRefs must be set"
+// +kubebuilder:validation:XValidation:rule="!(has(self.tenantRefs) && size(self.tenantRefs) > 0) || !has(self.secret)",message="secret must not be set when tenantRefs is set; the operator generates a distinct secret per tenant"
 type DexClientSpec struct {
-	// connectionRef references the DexConnection used to reach Dex.
-	// +required
-	ConnectionRef corev1.LocalObjectReference `json:"connectionRef"`
+	// connectionRef references the DexConnection used to reach Dex. Mutually exclusive with
+	// tenantRefs.
+	// +optional
+	ConnectionRef *corev1.LocalObjectReference `json:"connectionRef,omitempty"`
+
+	// tenantRefs mount this client onto multiple tenant-scoped Dex contexts. Each referenced
+	// DexTenant runs its own Dex instance with its own upstream IDP connector, so the same
+	// OAuth2 client can authenticate against different IDPs depending on which tenant issuer
+	// a request targets. Mutually exclusive with connectionRef. Confidential clients
+	// (public=false) mounted this way receive a distinct, operator-generated client secret
+	// per tenant.
+	// +optional
+	TenantRefs []DexTenantReference `json:"tenantRefs,omitempty"`
 
 	// clientID is the Dex OAuth2 client identifier.
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	ClientID string `json:"clientID"`
 
-	// secret contains the client secret for confidential clients.
+	// secret contains the client secret for confidential clients. Only valid together with
+	// connectionRef; when tenantRefs is set, the operator generates a distinct secret per
+	// tenant instead.
 	// +optional
 	Secret *ValueSource `json:"secret,omitempty"`
 
@@ -72,6 +86,49 @@ type DexClientSpec struct {
 	RecreateOnImmutableChange bool `json:"recreateOnImmutableChange,omitempty"`
 }
 
+// DexTenantReference identifies a DexTenant that a DexClient mounts onto. Dex's Kubernetes
+// storage backend scopes all state, including which connectors are offered for login, to the
+// Kubernetes namespace a Dex instance runs in. Isolating one tenant's upstream IDP from
+// another's therefore requires running each DexTenant in its own namespace, so unlike most
+// same-object references in this API, tenantRefs must be able to cross namespaces.
+type DexTenantReference struct {
+	// name is the name of the referenced DexTenant.
+	// +kubebuilder:validation:MinLength=1
+	// +required
+	Name string `json:"name"`
+
+	// namespace is the namespace of the referenced DexTenant. Defaults to the DexClient's own
+	// namespace when unset.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// DexClientMountStatus reports the sync status of a DexClient against one mount target,
+// either the single connectionRef target or one entry from tenantRefs.
+type DexClientMountStatus struct {
+	// target identifies the mount target, formatted as "connection:<name>" or
+	// "tenant:<namespace>/<name>".
+	// +required
+	Target string `json:"target"`
+
+	// secretRef is the name of the Secret holding the client secret used for this target,
+	// when applicable.
+	// +optional
+	SecretRef string `json:"secretRef,omitempty"`
+
+	// ready reports whether this target is synced with Dex.
+	// +optional
+	Ready bool `json:"ready,omitempty"`
+
+	// reason is a short machine-readable reason for the current status.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// message is a human-readable message describing the current status.
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // DexClientStatus defines the observed state of DexClient.
 type DexClientStatus struct {
 	// observedGeneration is the last generation observed by the controller.
@@ -81,6 +138,12 @@ type DexClientStatus struct {
 	// clientID is the Dex client identifier last observed by the controller.
 	// +optional
 	ClientID string `json:"clientID,omitempty"`
+
+	// mounts reports the sync status of this client against each mount target.
+	// +listType=map
+	// +listMapKey=target
+	// +optional
+	Mounts []DexClientMountStatus `json:"mounts,omitempty"`
 
 	// conditions represent the current state of the DexClient resource.
 	// +listType=map

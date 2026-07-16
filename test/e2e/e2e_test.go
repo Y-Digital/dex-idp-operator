@@ -56,6 +56,14 @@ const metricsRoleBindingName = "dex-idp-operator-metrics-binding"
 
 const dexNamespace = "dex"
 
+// tenantANamespace and tenantBNamespace host the two managed DexTenant instances used by the
+// multi-tenant e2e scenario. Each DexTenant needs its own namespace because Dex's Kubernetes
+// storage backend scopes connector visibility to the namespace the Dex Deployment runs in.
+const (
+	tenantANamespace = "tenant-a-e2e"
+	tenantBNamespace = "tenant-b-e2e"
+)
+
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
@@ -362,6 +370,61 @@ var _ = Describe("Manager", Ordered, func() {
 			}, time.Minute, time.Second).Should(Succeed())
 		})
 
+		It("should route a multi-tenant DexClient to per-tenant managed Dex instances", func() {
+			By("creating two tenant namespaces, connectors, DexTenants, and a multi-tenant DexClient")
+			applyYAML(fmt.Sprintf(dexTenantE2EManifest, namespace))
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "ns", tenantANamespace, tenantBNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			})
+
+			By("waiting for both DexTenants to become ready")
+			Eventually(dexTenantCondition(tenantANamespace, "tenant-a", "Ready"), 3*time.Minute, time.Second).
+				Should(Equal("True"))
+			Eventually(dexTenantCondition(tenantBNamespace, "tenant-b", "Ready"), 3*time.Minute, time.Second).
+				Should(Equal("True"))
+
+			By("waiting for the multi-tenant DexClient to sync onto both tenants")
+			Eventually(dexClientCondition(namespace, "multi-app", "Synced"), 2*time.Minute, time.Second).
+				Should(Equal("True"))
+
+			By("verifying the client exists in tenant A's Dex with its own generated secret")
+			dexA, closeDexA := portForwardService(tenantANamespace, "tenant-a-dex")
+			defer closeDexA()
+			var secretA string
+			Eventually(func(g Gomega) {
+				resp, err := dexA.GetClient(context.Background(), &dexapi.GetClientReq{Id: "multi-app"})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(resp.GetClient().GetRedirectUris()).To(Equal([]string{"https://multi-app.example.com/callback"}))
+				secretA = resp.GetClient().GetSecret()
+				g.Expect(secretA).NotTo(BeEmpty())
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("verifying the client exists in tenant B's Dex with a different generated secret")
+			dexB, closeDexB := portForwardService(tenantBNamespace, "tenant-b-dex")
+			defer closeDexB()
+			Eventually(func(g Gomega) {
+				resp, err := dexB.GetClient(context.Background(), &dexapi.GetClientReq{Id: "multi-app"})
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(resp.GetClient().GetRedirectUris()).To(Equal([]string{"https://multi-app.example.com/callback"}))
+				g.Expect(resp.GetClient().GetSecret()).NotTo(BeEmpty())
+				g.Expect(resp.GetClient().GetSecret()).NotTo(Equal(secretA))
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("deleting the DexClient and verifying cleanup from both tenants")
+			cmd := exec.Command("kubectl", "delete", "dexclient", "multi-app", "-n", namespace)
+			_, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) {
+				_, err := dexA.GetClient(context.Background(), &dexapi.GetClientReq{Id: "multi-app"})
+				g.Expect(err).To(HaveOccurred())
+			}, time.Minute, time.Second).Should(Succeed())
+			Eventually(func(g Gomega) {
+				_, err := dexB.GetClient(context.Background(), &dexapi.GetClientReq{Id: "multi-app"})
+				g.Expect(err).To(HaveOccurred())
+			}, time.Minute, time.Second).Should(Succeed())
+		})
+
 		// +kubebuilder:scaffold:e2e-webhooks-checks
 
 		// TODO: Customize the e2e test suite with scenarios specific to your project.
@@ -491,6 +554,75 @@ spec:
   name: E2E App
 `
 
+const dexTenantE2EManifest = `apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a-e2e
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-b-e2e
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  name: tenant-a-connector
+  namespace: tenant-a-e2e
+spec:
+  connectorID: mock
+  type: mockCallback
+  displayName: Tenant A Mock
+  config: {}
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  name: tenant-b-connector
+  namespace: tenant-b-e2e
+spec:
+  connectorID: mock
+  type: mockCallback
+  displayName: Tenant B Mock
+  config: {}
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  name: tenant-a
+  namespace: tenant-a-e2e
+spec:
+  issuer: http://tenant-a-dex.tenant-a-e2e.svc.cluster.local:5556/dex
+  connectorRef:
+    name: tenant-a-connector
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  name: tenant-b
+  namespace: tenant-b-e2e
+spec:
+  issuer: http://tenant-b-dex.tenant-b-e2e.svc.cluster.local:5556/dex
+  connectorRef:
+    name: tenant-b-connector
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexClient
+metadata:
+  name: multi-app
+  namespace: %[1]s
+spec:
+  tenantRefs:
+  - name: tenant-a
+    namespace: tenant-a-e2e
+  - name: tenant-b
+    namespace: tenant-b-e2e
+  clientID: multi-app
+  redirectURIs:
+  - https://multi-app.example.com/callback
+  name: Multi Tenant App
+`
+
 func installDex() {
 	applyYAML(dexManifest)
 
@@ -542,13 +674,32 @@ func dexClientCondition(namespace, name, conditionType string) func() string {
 	}
 }
 
+func dexTenantCondition(namespace, name, conditionType string) func() string {
+	return func() string {
+		cmd := exec.Command("kubectl", "get", "dextenant", name, "-n", namespace,
+			"-o", fmt.Sprintf("jsonpath={.status.conditions[?(@.type==\"%s\")].status}", conditionType))
+		output, err := utils.Run(cmd)
+		if err != nil {
+			return ""
+		}
+		return output
+	}
+}
+
 func portForwardDex() (dexapi.DexClient, func()) {
+	return portForwardService(dexNamespace, "dex")
+}
+
+// portForwardService port-forwards to the gRPC port of the named Dex Service in namespace and
+// returns a Dex API client dialed through the forwarded port, along with a cleanup function
+// that closes the connection and stops the port-forward.
+func portForwardService(namespace, serviceName string) (dexapi.DexClient, func()) {
 	port := freeLocalPort()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	var stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, "kubectl", "port-forward", "-n", dexNamespace,
-		"service/dex", fmt.Sprintf("%d:5557", port))
+	cmd := exec.CommandContext(ctx, "kubectl", "port-forward", "-n", namespace,
+		"service/"+serviceName, fmt.Sprintf("%d:5557", port))
 	cmd.Stderr = &stderr
 	err := cmd.Start()
 	Expect(err).NotTo(HaveOccurred())

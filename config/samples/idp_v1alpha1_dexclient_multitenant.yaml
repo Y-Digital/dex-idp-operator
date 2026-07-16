@@ -1,0 +1,102 @@
+# A single OAuth2 client mounted onto two tenant-scoped Dex contexts. Each DexTenant runs its
+# own Dex instance with its own upstream IDP connector, so a backend application authenticates
+# against whichever IDP a given tenant's Dex issuer is configured with, while reusing the same
+# clientID everywhere.
+#
+# Dex's Kubernetes storage backend scopes all state, including which connectors are offered for
+# login, to the Kubernetes namespace a Dex instance runs in. Two DexTenants sharing a namespace
+# would therefore share connector storage and leak each other's IDPs, so each DexTenant below
+# lives in its own dedicated namespace. Because tenantRefs can reference DexTenants outside the
+# DexClient's own namespace, each entry sets an explicit namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-a
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tenant-b
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tenant-a-connector
+  namespace: tenant-a
+spec:
+  connectorID: upstream-oidc
+  type: oidc
+  displayName: Tenant A IDP
+  config:
+    issuer: https://idp-a.example.com
+    clientID: dex
+    clientSecret: change-me
+    redirectURI: https://tenant-a.example.com/dex/callback
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tenant-b-connector
+  namespace: tenant-b
+spec:
+  connectorID: upstream-oidc
+  type: oidc
+  displayName: Tenant B IDP
+  config:
+    issuer: https://idp-b.example.com
+    clientID: dex
+    clientSecret: change-me
+    redirectURI: https://tenant-b.example.com/dex/callback
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tenant-a
+  namespace: tenant-a
+spec:
+  issuer: https://tenant-a.example.com/dex
+  connectorRef:
+    name: tenant-a-connector
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: tenant-b
+  namespace: tenant-b
+spec:
+  issuer: https://tenant-b.example.com/dex
+  connectorRef:
+    name: tenant-b-connector
+---
+# Because public is false and tenantRefs is set, the operator generates a distinct client
+# secret Secret per tenant mount, in the DexClient's own namespace (see status.mounts on the
+# DexClient once it reconciles).
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexClient
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: backend-app
+spec:
+  tenantRefs:
+    - name: tenant-a
+      namespace: tenant-a
+    - name: tenant-b
+      namespace: tenant-b
+  clientID: backend-app
+  redirectURIs:
+    - https://backend.example.com/callback
+  name: Backend App

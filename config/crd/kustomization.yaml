@@ -4,6 +4,8 @@
 resources:
 - bases/idp.groeneslot.nl_dexconnections.yaml
 - bases/idp.groeneslot.nl_dexclients.yaml
+- bases/idp.groeneslot.nl_dexconnectors.yaml
+- bases/idp.groeneslot.nl_dextenants.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

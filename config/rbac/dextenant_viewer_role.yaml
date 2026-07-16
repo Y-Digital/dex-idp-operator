@@ -1,0 +1,29 @@
+# This rule is not used by the project dex-idp-operator itself.
+# It is provided to allow the cluster admin to help manage permissions for users.
+#
+# Grants read-only access to idp.groeneslot.nl resources.
+# This role is intended for users who need visibility into these resources
+# without permissions to modify them. It is ideal for monitoring purposes and limited-access viewing.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: dextenant-viewer-role
+rules:
+- apiGroups:
+  - idp.groeneslot.nl
+  resources:
+  - dextenants
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - idp.groeneslot.nl
+  resources:
+  - dextenants/status
+  verbs:
+  - get

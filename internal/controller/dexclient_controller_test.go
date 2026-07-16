@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	dexapi "github.com/dexidp/dex/api/v2"
 	. "github.com/onsi/ginkgo/v2"
@@ -54,7 +55,7 @@ var _ = Describe("DexClient Controller", func() {
 		fakeDex := newFakeDexClient()
 
 		BeforeEach(func() {
-			cleanupDexClientTestResources(ctx, resourceNamespace)
+			cleanupDexClientTestResources(ctx)
 			fakeDex = newFakeDexClient()
 
 			By("creating the DexConnection")
@@ -89,7 +90,7 @@ var _ = Describe("DexClient Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: idpv1alpha1.DexClientSpec{
-					ConnectionRef: corev1.LocalObjectReference{Name: connectionName},
+					ConnectionRef: &corev1.LocalObjectReference{Name: connectionName},
 					ClientID:      "example-app",
 					Secret: &idpv1alpha1.ValueSource{
 						ValueFrom: &idpv1alpha1.SecretValueSource{
@@ -107,7 +108,7 @@ var _ = Describe("DexClient Controller", func() {
 		})
 
 		AfterEach(func() {
-			cleanupDexClientTestResources(ctx, resourceNamespace)
+			cleanupDexClientTestResources(ctx)
 		})
 
 		It("creates a missing Dex client from SecretRef values", func() {
@@ -180,6 +181,236 @@ var _ = Describe("DexClient Controller", func() {
 	})
 })
 
+var _ = Describe("DexClient Controller with tenantRefs", func() {
+	const (
+		resourceName      = "multi-tenant-app"
+		resourceNamespace = "default"
+		tenantAName       = "tenant-a"
+		tenantBName       = "tenant-b"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+	fakeDexA := newFakeDexClient()
+	fakeDexB := newFakeDexClient()
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+		fakeDexA = newFakeDexClient()
+		fakeDexB = newFakeDexClient()
+
+		By("creating owned DexConnections and ready DexTenants")
+		createReadyTenant(ctx, resourceNamespace, tenantAName)
+		createReadyTenant(ctx, resourceNamespace, tenantBName)
+
+		By("creating the multi-tenant DexClient")
+		resource := &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				TenantRefs: []idpv1alpha1.DexTenantReference{
+					{Name: tenantAName},
+					{Name: tenantBName},
+				},
+				ClientID:     "backend-app",
+				RedirectURIs: []string{"https://backend.example.com/callback"},
+				Name:         "Backend App",
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+	})
+
+	It("mounts the client onto every tenant with a distinct generated secret", func() {
+		controllerReconciler := newTestMultiDexClientReconciler(tenantAName, fakeDexA, tenantBName, fakeDexB)
+
+		By("adding the finalizer")
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		By("creating the client in both tenants")
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		clientA := fakeDexA.clients["backend-app"]
+		clientB := fakeDexB.clients["backend-app"]
+		Expect(clientA).NotTo(BeNil())
+		Expect(clientB).NotTo(BeNil())
+		Expect(clientA.GetSecret()).NotTo(BeEmpty())
+		Expect(clientB.GetSecret()).NotTo(BeEmpty())
+		Expect(clientA.GetSecret()).NotTo(Equal(clientB.GetSecret()))
+
+		By("generating one Secret per tenant mount")
+		secretA := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Namespace: resourceNamespace, Name: resourceName + "-" + tenantAName + "-secret",
+		}, secretA)).To(Succeed())
+		Expect(string(secretA.Data[generatedSecretKey])).To(Equal(clientA.GetSecret()))
+
+		By("reporting per-tenant mount status")
+		updated := &idpv1alpha1.DexClient{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(updated.Status.Mounts).To(HaveLen(2))
+		for _, mount := range updated.Status.Mounts {
+			Expect(mount.Ready).To(BeTrue())
+		}
+		condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	It("deletes the client from every mounted tenant during finalizer cleanup", func() {
+		controllerReconciler := newTestMultiDexClientReconciler(tenantAName, fakeDexA, tenantBName, fakeDexB)
+
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeDexA.clients).To(HaveKey("backend-app"))
+		Expect(fakeDexB.clients).To(HaveKey("backend-app"))
+
+		resource := &idpv1alpha1.DexClient{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+		Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(fakeDexA.clients).NotTo(HaveKey("backend-app"))
+		Expect(fakeDexB.clients).NotTo(HaveKey("backend-app"))
+	})
+})
+
+var _ = Describe("DexClient Controller with cross-namespace tenantRefs", func() {
+	const (
+		resourceName      = "cross-ns-app"
+		resourceNamespace = "default"
+		tenantName        = "tenant-x"
+		tenantNamespace   = "tenant-x-ns"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+	fakeDexX := newFakeDexClient()
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+		fakeDexX = newFakeDexClient()
+
+		By("creating the tenant namespace")
+		namespace := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tenantNamespace}}
+		if err := k8sClient.Create(ctx, namespace); err != nil && !apierrors.IsAlreadyExists(err) {
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		By("creating a ready DexTenant in its own namespace")
+		createReadyTenant(ctx, tenantNamespace, tenantName)
+
+		By("creating a DexClient in a different namespace referencing that tenant")
+		resource := &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				TenantRefs: []idpv1alpha1.DexTenantReference{
+					{Name: tenantName, Namespace: tenantNamespace},
+				},
+				ClientID:     "cross-ns-backend",
+				RedirectURIs: []string{"https://cross-ns.example.com/callback"},
+				Name:         "Cross Namespace App",
+			},
+		}
+		Expect(k8sClient.Create(ctx, resource)).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+		Expect(k8sClient.DeleteAllOf(ctx, &idpv1alpha1.DexTenant{}, client.InNamespace(tenantNamespace))).To(Succeed())
+		Expect(k8sClient.DeleteAllOf(ctx, &idpv1alpha1.DexConnection{}, client.InNamespace(tenantNamespace))).To(Succeed())
+	})
+
+	It("mounts the client onto a DexTenant in a different namespace", func() {
+		controllerReconciler := &DexClientReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			ClientFactory: func(_ context.Context, cfg dex.DialConfig) (dex.Client, error) {
+				if cfg.Address == tenantName+".example.com:5557" {
+					return fakeDexX, nil
+				}
+				return nil, fmt.Errorf("unexpected dial address %q", cfg.Address)
+			},
+		}
+
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		created := fakeDexX.clients["cross-ns-backend"]
+		Expect(created).NotTo(BeNil())
+		Expect(created.GetSecret()).NotTo(BeEmpty())
+
+		By("generating the client secret in the DexClient's own namespace")
+		secret := &corev1.Secret{}
+		Expect(k8sClient.Get(ctx, types.NamespacedName{
+			Namespace: resourceNamespace,
+			Name:      resourceName + "-" + tenantNamespace + "-" + tenantName + "-secret",
+		}, secret)).To(Succeed())
+		Expect(string(secret.Data[generatedSecretKey])).To(Equal(created.GetSecret()))
+
+		updated := &idpv1alpha1.DexClient{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(updated.Status.Mounts).To(HaveLen(1))
+		Expect(updated.Status.Mounts[0].Target).To(Equal("tenant:" + tenantNamespace + "/" + tenantName))
+		condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+		Expect(condition).NotTo(BeNil())
+		Expect(condition.Status).To(Equal(metav1.ConditionTrue))
+	})
+})
+
+// createReadyTenant creates a DexConnection and a DexTenant whose status already points at it,
+// simulating a DexTenant whose managed Dex instance is up and running.
+func createReadyTenant(ctx context.Context, namespace, tenantName string) {
+	connection := &idpv1alpha1.DexConnection{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespace},
+		Spec: idpv1alpha1.DexConnectionSpec{
+			Address:   tenantName + ".example.com:5557",
+			Plaintext: true,
+		},
+	}
+	Expect(k8sClient.Create(ctx, connection)).To(Succeed())
+
+	tenant := &idpv1alpha1.DexTenant{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespace},
+		Spec: idpv1alpha1.DexTenantSpec{
+			Issuer:       "https://" + tenantName + ".example.com/dex",
+			ConnectorRef: corev1.LocalObjectReference{Name: tenantName + "-connector"},
+		},
+	}
+	Expect(k8sClient.Create(ctx, tenant)).To(Succeed())
+	tenant.Status.ConnectionRef = connection.Name
+	Expect(k8sClient.Status().Update(ctx, tenant)).To(Succeed())
+}
+
+func newTestMultiDexClientReconciler(
+	tenantA string, fakeDexA *fakeDexClient,
+	tenantB string, fakeDexB *fakeDexClient,
+) *DexClientReconciler {
+	return &DexClientReconciler{
+		Client: k8sClient,
+		Scheme: k8sClient.Scheme(),
+		ClientFactory: func(_ context.Context, cfg dex.DialConfig) (dex.Client, error) {
+			switch cfg.Address {
+			case tenantA + ".example.com:5557":
+				return fakeDexA, nil
+			case tenantB + ".example.com:5557":
+				return fakeDexB, nil
+			default:
+				return nil, fmt.Errorf("unexpected dial address %q", cfg.Address)
+			}
+		},
+	}
+}
+
 func newTestDexClientReconciler(fakeDex *fakeDexClient) *DexClientReconciler {
 	return &DexClientReconciler{
 		Client: k8sClient,
@@ -191,12 +422,17 @@ func newTestDexClientReconciler(fakeDex *fakeDexClient) *DexClientReconciler {
 }
 
 type fakeDexClient struct {
-	clients map[string]*dexapi.Client
-	closed  bool
+	clients     map[string]*dexapi.Client
+	connectors  map[string]*dexapi.Connector
+	unreachable bool
+	closed      bool
 }
 
 func newFakeDexClient() *fakeDexClient {
-	return &fakeDexClient{clients: map[string]*dexapi.Client{}}
+	return &fakeDexClient{
+		clients:    map[string]*dexapi.Client{},
+		connectors: map[string]*dexapi.Connector{},
+	}
 }
 
 func (f *fakeDexClient) GetClient(_ context.Context, id string) (*dexapi.Client, error) {
@@ -235,6 +471,40 @@ func (f *fakeDexClient) DeleteClient(_ context.Context, id string) error {
 	return nil
 }
 
+func (f *fakeDexClient) GetVersion(_ context.Context) (*dexapi.VersionResp, error) {
+	if f.unreachable {
+		return nil, errors.New("fake dex unreachable")
+	}
+	return &dexapi.VersionResp{Server: "fake"}, nil
+}
+
+func (f *fakeDexClient) CreateConnector(_ context.Context, connector *dexapi.Connector) error {
+	if _, ok := f.connectors[connector.GetId()]; ok {
+		return dex.ErrAlreadyExists
+	}
+	f.connectors[connector.GetId()] = connector
+	return nil
+}
+
+func (f *fakeDexClient) UpdateConnector(_ context.Context, req *dexapi.UpdateConnectorReq) error {
+	connector, ok := f.connectors[req.GetId()]
+	if !ok {
+		return dex.ErrNotFound
+	}
+	connector.Type = req.GetNewType()
+	connector.Name = req.GetNewName()
+	connector.Config = req.GetNewConfig()
+	return nil
+}
+
+func (f *fakeDexClient) DeleteConnector(_ context.Context, id string) error {
+	if _, ok := f.connectors[id]; !ok {
+		return dex.ErrNotFound
+	}
+	delete(f.connectors, id)
+	return nil
+}
+
 func (f *fakeDexClient) Close() error {
 	if f.closed {
 		return errors.New("fake dex client already closed")
@@ -255,7 +525,9 @@ func cloneDexClient(dexClient *dexapi.Client) *dexapi.Client {
 	}
 }
 
-func cleanupDexClientTestResources(ctx context.Context, namespace string) {
+func cleanupDexClientTestResources(ctx context.Context) {
+	const namespace = "default"
+
 	dexClients := &idpv1alpha1.DexClientList{}
 	Expect(k8sClient.List(ctx, dexClients, client.InNamespace(namespace))).To(Succeed())
 	for i := range dexClients.Items {
@@ -267,12 +539,13 @@ func cleanupDexClientTestResources(ctx context.Context, namespace string) {
 		Expect(client.IgnoreNotFound(k8sClient.Delete(ctx, dexClient))).To(Succeed())
 	}
 
+	Expect(k8sClient.DeleteAllOf(ctx, &idpv1alpha1.DexTenant{}, client.InNamespace(namespace))).To(Succeed())
 	Expect(k8sClient.DeleteAllOf(ctx, &idpv1alpha1.DexConnection{}, client.InNamespace(namespace))).To(Succeed())
 	Expect(k8sClient.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(namespace))).To(Succeed())
 
 	Eventually(func(g Gomega) {
-		dexClient := &idpv1alpha1.DexClient{}
-		err := k8sClient.Get(ctx, types.NamespacedName{Namespace: namespace, Name: "test-client"}, dexClient)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+		dexClients := &idpv1alpha1.DexClientList{}
+		g.Expect(k8sClient.List(ctx, dexClients, client.InNamespace(namespace))).To(Succeed())
+		g.Expect(dexClients.Items).To(BeEmpty())
 	}).Should(Succeed())
 }
