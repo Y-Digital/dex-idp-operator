@@ -90,11 +90,14 @@ var _ = Describe("DexTenant Controller", func() {
 				&rbacv1.Role{})).To(Succeed())
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&rbacv1.RoleBinding{})).To(Succeed())
+			configMap := &corev1.ConfigMap{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
-				&corev1.ConfigMap{})).To(Succeed())
+				configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring("oauth2:"))
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx,
 				types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Annotations).To(HaveKey(dexConfigChecksumKey))
 			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
 				Name:  "DEX_API_CONNECTORS_CRUD",
@@ -142,6 +145,39 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(condition.Reason).To(Equal("DexUnavailable"))
+		})
+
+		It("configures the approval screen per tenant and rolls Dex when it changes", func() {
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			tenant := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Spec.OAuth2 = &idpv1alpha1.DexTenantOAuth2Config{SkipApprovalScreen: false}
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			configMap := &corev1.ConfigMap{}
+			resourceKey := types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}
+			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("oauth2:\n  skipApprovalScreen: false"))
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
+			approvalRequiredChecksum := deployment.Spec.Template.Annotations[dexConfigChecksumKey]
+
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Spec.OAuth2.SkipApprovalScreen = true
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("oauth2:\n  skipApprovalScreen: true"))
+			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Annotations[dexConfigChecksumKey]).NotTo(Equal(approvalRequiredChecksum))
 		})
 	})
 })

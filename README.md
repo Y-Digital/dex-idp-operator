@@ -165,7 +165,14 @@ spec:
   issuer: https://tenant-a.example.com/dex
   connectorRef:
     name: tenant-a-connector
+  oauth2:
+    # Optional; defaults to false. Enable only when every client is trusted.
+    skipApprovalScreen: true
 ```
+
+`spec.oauth2.skipApprovalScreen` controls Dex's consent page independently for
+each managed instance. Changing it updates the generated Dex configuration and
+rolls that tenant's Deployment because Dex does not hot-reload `config.yaml`.
 
 Mount a single OAuth2 client onto multiple tenants, each getting its own
 generated client secret:

@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
 
@@ -44,6 +45,7 @@ import (
 const (
 	dexStorageAPIGroup   = "dex.coreos.com"
 	dexStorageAPIVersion = "v1"
+	dexConfigChecksumKey = "idp.groeneslot.nl/config-checksum"
 )
 
 // dexStorageResources lists every custom resource Dex's Kubernetes storage backend requires,
@@ -177,7 +179,7 @@ func (r *DexTenantReconciler) ensureStorageRBAC(ctx context.Context, tenant *idp
 	return nil
 }
 
-func (r *DexTenantReconciler) ensureConfigMap(ctx context.Context, tenant *idpv1alpha1.DexTenant) error {
+func dexTenantConfig(tenant *idpv1alpha1.DexTenant) string {
 	config := fmt.Sprintf(`issuer: %s
 storage:
   type: kubernetes
@@ -188,12 +190,20 @@ web:
 grpc:
   addr: 0.0.0.0:5557
 `, tenant.Spec.Issuer)
+	if tenant.Spec.OAuth2 != nil {
+		config += fmt.Sprintf(`oauth2:
+  skipApprovalScreen: %t
+`, tenant.Spec.OAuth2.SkipApprovalScreen)
+	}
+	return config
+}
 
+func (r *DexTenantReconciler) ensureConfigMap(ctx context.Context, tenant *idpv1alpha1.DexTenant) error {
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: dexTenantResourceName(tenant), Namespace: tenant.Namespace},
 	}
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Data = map[string]string{"config.yaml": config}
+		cm.Data = map[string]string{"config.yaml": dexTenantConfig(tenant)}
 		return controllerutil.SetControllerReference(tenant, cm, r.Scheme)
 	})
 	return err
@@ -210,6 +220,7 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 	}
 	labels := dexTenantLabels(tenant)
 	name := dexTenantResourceName(tenant)
+	configChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(dexTenantConfig(tenant))))
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tenant.Namespace},
@@ -219,7 +230,10 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 			Replicas: replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
 			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{dexConfigChecksumKey: configChecksum},
+				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: name,
 					SecurityContext: &corev1.PodSecurityContext{

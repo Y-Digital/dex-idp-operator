@@ -12,3 +12,6 @@ spec:
   connectorRef:
     name: dexconnector-sample
   replicas: 1
+  oauth2:
+    # Skip Dex's consent page only when every registered client is trusted.
+    skipApprovalScreen: false

@@ -26,6 +26,15 @@ import (
 // spec.image is not set.
 const DefaultDexImage = "ghcr.io/dexidp/dex:v2.43.1"
 
+// DexTenantOAuth2Config defines OAuth2 server behavior for a managed Dex instance.
+type DexTenantOAuth2Config struct {
+	// skipApprovalScreen skips Dex's user-facing approval screen after authentication.
+	// Enable this only when users should implicitly trust every client registered with
+	// this Dex instance.
+	// +optional
+	SkipApprovalScreen bool `json:"skipApprovalScreen,omitempty"`
+}
+
 // DexTenantSpec defines the desired state of a tenant-scoped, operator-managed Dex instance.
 //
 // A DexTenant owns one Dex Deployment, Service, and Kubernetes-storage-backed issuer. The
@@ -55,6 +64,10 @@ type DexTenantSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// oauth2 configures OAuth2 server behavior for this managed Dex instance.
+	// +optional
+	OAuth2 *DexTenantOAuth2Config `json:"oauth2,omitempty"`
 }
 
 // DexTenantStatus defines the observed state of DexTenant.

@@ -857,6 +857,17 @@ spec:
                   issuer must be made reachable at this URL by other means.
                 minLength: 1
                 type: string
+              oauth2:
+                description: oauth2 configures OAuth2 server behavior for this managed
+                  Dex instance.
+                properties:
+                  skipApprovalScreen:
+                    description: |-
+                      skipApprovalScreen skips Dex's user-facing approval screen after authentication.
+                      Enable this only when users should implicitly trust every client registered with
+                      this Dex instance.
+                    type: boolean
+                type: object
               replicas:
                 default: 1
                 description: replicas is the desired number of managed Dex pod replicas.
