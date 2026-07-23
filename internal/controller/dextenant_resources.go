@@ -33,7 +33,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
@@ -46,6 +45,8 @@ const (
 	dexStorageAPIGroup   = "dex.coreos.com"
 	dexStorageAPIVersion = "v1"
 	dexConfigChecksumKey = "idp.groeneslot.nl/config-checksum"
+	dexAppName           = "dex"
+	dexConfigVolumeName  = "config"
 )
 
 // dexStorageResources lists every custom resource Dex's Kubernetes storage backend requires,
@@ -108,7 +109,7 @@ func buildDexStorageCRD(plural, singular, kind string) *apiextensionsv1.CustomRe
 					Schema: &apiextensionsv1.CustomResourceValidation{
 						OpenAPIV3Schema: &apiextensionsv1.JSONSchemaProps{
 							Type:                   "object",
-							XPreserveUnknownFields: ptr.To(true),
+							XPreserveUnknownFields: new(true),
 						},
 					},
 				},
@@ -126,7 +127,7 @@ func dexTenantResourceName(tenant *idpv1alpha1.DexTenant) string {
 
 func dexTenantLabels(tenant *idpv1alpha1.DexTenant) map[string]string {
 	return map[string]string{
-		"app.kubernetes.io/name":     "dex",
+		"app.kubernetes.io/name":     dexAppName,
 		"app.kubernetes.io/instance": tenant.Name,
 	}
 }
@@ -216,7 +217,7 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 	}
 	replicas := tenant.Spec.Replicas
 	if replicas == nil {
-		replicas = ptr.To(int32(1))
+		replicas = new(int32(1))
 	}
 	labels := dexTenantLabels(tenant)
 	name := dexTenantResourceName(tenant)
@@ -237,16 +238,16 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 				Spec: corev1.PodSpec{
 					ServiceAccountName: name,
 					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: ptr.To(true),
+						RunAsNonRoot: new(true),
 						SeccompProfile: &corev1.SeccompProfile{
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},
 					},
 					Containers: []corev1.Container{
 						{
-							Name:    "dex",
+							Name:    dexAppName,
 							Image:   image,
-							Command: []string{"dex", "serve", "/etc/dex/config.yaml"},
+							Command: []string{dexAppName, "serve", "/etc/dex/config.yaml"},
 							Env: []corev1.EnvVar{
 								{Name: "DEX_API_CONNECTORS_CRUD", Value: "true"},
 							},
@@ -255,10 +256,10 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 								{Name: "grpc", ContainerPort: 5557},
 							},
 							VolumeMounts: []corev1.VolumeMount{
-								{Name: "config", MountPath: "/etc/dex", ReadOnly: true},
+								{Name: dexConfigVolumeName, MountPath: "/etc/dex", ReadOnly: true},
 							},
 							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: ptr.To(false),
+								AllowPrivilegeEscalation: new(false),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
 								},
@@ -267,7 +268,7 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: "config",
+							Name: dexConfigVolumeName,
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{Name: name},

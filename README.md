@@ -69,7 +69,7 @@ internal plaintext for this MVP; only reach it from within the cluster.
 ## Getting Started
 
 ### Prerequisites
-- go version v1.25.7+
+- go version v1.26.5+
 - docker version 17.03+.
 - kubectl version v1.11.3+.
 - Access to a Kubernetes v1.11.3+ cluster.

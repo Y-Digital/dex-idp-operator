@@ -37,6 +37,9 @@ import (
 	"groeneslot.nl/dex-idp-operator/internal/dex"
 )
 
+const exampleApp string = "example-app"
+const exampleCallback string = "https://app.example.com/callback"
+
 var _ = Describe("DexClient Controller", func() {
 	Context("When reconciling a resource", func() {
 		const (
@@ -91,7 +94,7 @@ var _ = Describe("DexClient Controller", func() {
 				},
 				Spec: idpv1alpha1.DexClientSpec{
 					ConnectionRef: &corev1.LocalObjectReference{Name: connectionName},
-					ClientID:      "example-app",
+					ClientID:      exampleApp,
 					Secret: &idpv1alpha1.ValueSource{
 						ValueFrom: &idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
@@ -100,7 +103,7 @@ var _ = Describe("DexClient Controller", func() {
 							},
 						},
 					},
-					RedirectURIs: []string{"https://app.example.com/callback"},
+					RedirectURIs: []string{exampleCallback},
 					Name:         "Example App",
 				},
 			}
@@ -122,10 +125,10 @@ var _ = Describe("DexClient Controller", func() {
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
-			created := fakeDex.clients["example-app"]
+			created := fakeDex.clients[exampleApp]
 			Expect(created).NotTo(BeNil())
 			Expect(created.GetSecret()).To(Equal(secretValue))
-			Expect(created.GetRedirectUris()).To(Equal([]string{"https://app.example.com/callback"}))
+			Expect(created.GetRedirectUris()).To(Equal([]string{exampleCallback}))
 
 			updated := &idpv1alpha1.DexClient{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
@@ -135,10 +138,10 @@ var _ = Describe("DexClient Controller", func() {
 		})
 
 		It("blocks immutable secret changes unless recreation is enabled", func() {
-			fakeDex.clients["example-app"] = &dexapi.Client{
-				Id:           "example-app",
+			fakeDex.clients[exampleApp] = &dexapi.Client{
+				Id:           exampleApp,
 				Secret:       "old-secret",
-				RedirectUris: []string{"https://app.example.com/callback"},
+				RedirectUris: []string{exampleCallback},
 				Name:         "Example App",
 			}
 			controllerReconciler := newTestDexClientReconciler(fakeDex)
@@ -156,11 +159,11 @@ var _ = Describe("DexClient Controller", func() {
 			blocked := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionBlocked)
 			Expect(blocked).NotTo(BeNil())
 			Expect(blocked.Status).To(Equal(metav1.ConditionTrue))
-			Expect(fakeDex.clients["example-app"].GetSecret()).To(Equal("old-secret"))
+			Expect(fakeDex.clients[exampleApp].GetSecret()).To(Equal("old-secret"))
 		})
 
 		It("deletes the Dex client during finalizer cleanup", func() {
-			fakeDex.clients["example-app"] = &dexapi.Client{Id: "example-app", Secret: secretValue}
+			fakeDex.clients[exampleApp] = &dexapi.Client{Id: exampleApp, Secret: secretValue}
 			controllerReconciler := newTestDexClientReconciler(fakeDex)
 
 			By("adding the finalizer")
@@ -176,7 +179,7 @@ var _ = Describe("DexClient Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			Expect(fakeDex.clients).NotTo(HaveKey("example-app"))
+			Expect(fakeDex.clients).NotTo(HaveKey(exampleApp))
 		})
 	})
 })
