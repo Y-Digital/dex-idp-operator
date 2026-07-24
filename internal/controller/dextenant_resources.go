@@ -64,6 +64,8 @@ var dexStorageResources = []struct {
 	{"passwords", "password", "Password"},
 	{"offlinesessionses", "offlinesessions", "OfflineSessions"},
 	{"connectors", "connector", "Connector"},
+	{"devicerequests", "devicerequest", "DeviceRequest"},
+	{"devicetokens", "devicetoken", "DeviceToken"},
 }
 
 // ensureDexStorageCRDs makes sure the CRDs required by Dex's Kubernetes storage backend

@@ -68,7 +68,7 @@ type DexTenantReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch;create
-// +kubebuilder:rbac:groups=dex.coreos.com,resources=authcodes;authrequests;oauth2clients;signingkeies;refreshtokens;passwords;offlinesessionses;connectors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=dex.coreos.com,resources=authcodes;authrequests;oauth2clients;signingkeies;refreshtokens;passwords;offlinesessionses;connectors;devicerequests;devicetokens,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile provisions a tenant-scoped, operator-managed Dex instance: it ensures Dex's
 // Kubernetes storage CRDs and RBAC exist, renders the Dex Deployment/Service/ConfigMap,
