@@ -196,7 +196,8 @@ grpc:
 	if tenant.Spec.OAuth2 != nil {
 		config += fmt.Sprintf(`oauth2:
   skipApprovalScreen: %t
-`, tenant.Spec.OAuth2.SkipApprovalScreen)
+  clientCredentialsEnabled: %t
+`, tenant.Spec.OAuth2.SkipApprovalScreen, tenant.Spec.OAuth2.ClientCredentialsEnabled)
 	}
 	return config
 }

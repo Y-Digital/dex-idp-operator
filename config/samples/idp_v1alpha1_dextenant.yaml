@@ -15,3 +15,5 @@ spec:
   oauth2:
     # Skip Dex's consent page only when every registered client is trusted.
     skipApprovalScreen: false
+    # Enable OAuth2 client_credentials for confidential M2M DexClients.
+    clientCredentialsEnabled: true

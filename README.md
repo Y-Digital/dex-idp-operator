@@ -168,10 +168,14 @@ spec:
   oauth2:
     # Optional; defaults to false. Enable only when every client is trusted.
     skipApprovalScreen: true
+    # Optional; enables grant_type=client_credentials for confidential clients.
+    clientCredentialsEnabled: true
 ```
 
 `spec.oauth2.skipApprovalScreen` controls Dex's consent page independently for
-each managed instance. Changing it updates the generated Dex configuration and
+each managed instance. `spec.oauth2.clientCredentialsEnabled` turns on the
+OAuth2 client_credentials grant for machine-to-machine clients on that Dex.
+Changing either field updates the generated Dex configuration and
 rolls that tenant's Deployment because Dex does not hot-reload `config.yaml`.
 
 Mount a single OAuth2 client onto multiple tenants, each getting its own

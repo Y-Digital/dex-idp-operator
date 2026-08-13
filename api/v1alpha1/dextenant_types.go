@@ -33,6 +33,11 @@ type DexTenantOAuth2Config struct {
 	// this Dex instance.
 	// +optional
 	SkipApprovalScreen bool `json:"skipApprovalScreen,omitempty"`
+
+	// clientCredentialsEnabled enables the OAuth2 client_credentials grant on this Dex
+	// instance for confidential clients (machine-to-machine).
+	// +optional
+	ClientCredentialsEnabled bool `json:"clientCredentialsEnabled,omitempty"`
 }
 
 // DexTenantSpec defines the desired state of a tenant-scoped, operator-managed Dex instance.

@@ -79,6 +79,11 @@ spec:
                 description: oauth2 configures OAuth2 server behavior for this managed
                   Dex instance.
                 properties:
+                  clientCredentialsEnabled:
+                    description: |-
+                      clientCredentialsEnabled enables the OAuth2 client_credentials grant on this Dex
+                      instance for confidential clients (machine-to-machine).
+                    type: boolean
                   skipApprovalScreen:
                     description: |-
                       skipApprovalScreen skips Dex's user-facing approval screen after authentication.
