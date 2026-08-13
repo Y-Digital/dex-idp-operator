@@ -186,7 +186,7 @@ dex:
 
   image:
     repository: ghcr.io/dexidp/dex
-    tag: v2.43.1
+    tag: v2.45.1
     pullPolicy: IfNotPresent
 
   service:
