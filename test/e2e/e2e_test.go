@@ -39,6 +39,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
 	"groeneslot.nl/dex-idp-operator/test/utils"
 )
 
@@ -54,14 +55,13 @@ const metricsServiceName = "dex-idp-operator-controller-manager-metrics-service"
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "dex-idp-operator-metrics-binding"
 
-const dexNamespace = "dex"
-
-// tenantANamespace and tenantBNamespace host the two managed DexTenant instances used by the
-// multi-tenant e2e scenario. Each DexTenant needs its own namespace because Dex's Kubernetes
-// storage backend scopes connector visibility to the namespace the Dex Deployment runs in.
+// Each DexTenant needs its own namespace because Dex's Kubernetes storage backend scopes
+// connector visibility to the namespace the Dex Deployment runs in.
 const (
-	tenantANamespace = "tenant-a-e2e"
-	tenantBNamespace = "tenant-b-e2e"
+	tenantANamespace      = "tenant-a-e2e"
+	tenantBNamespace      = "tenant-b-e2e"
+	clientTenantNamespace = "tenant-client-e2e"
+	clientTenantName      = "tenant-client"
 )
 
 var _ = Describe("Manager", Ordered, func() {
@@ -91,9 +91,6 @@ var _ = Describe("Manager", Ordered, func() {
 		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
-
-		By("installing Dex for functional tests")
-		installDex()
 	})
 
 	// After all tests have been executed, clean up by undeploying the controller, uninstalling CRDs,
@@ -106,9 +103,6 @@ var _ = Describe("Manager", Ordered, func() {
 		By("cleaning up the metrics ClusterRoleBinding")
 		cmd = exec.Command("kubectl", "delete", "clusterrolebinding", metricsRoleBindingName, "--ignore-not-found")
 		_, _ = utils.Run(cmd)
-
-		By("removing Dex")
-		uninstallDex()
 
 		By("undeploying the controller-manager")
 		cmd = exec.Command("make", "undeploy")
@@ -162,6 +156,10 @@ var _ = Describe("Manager", Ordered, func() {
 				fmt.Println("Pod description:\n", podDescription)
 			} else {
 				fmt.Println("Failed to describe controller pod")
+			}
+
+			for _, ns := range []string{clientTenantNamespace, tenantANamespace, tenantBNamespace} {
+				dumpNamespace(ns)
 			}
 		}
 	})
@@ -302,16 +300,27 @@ var _ = Describe("Manager", Ordered, func() {
 			Eventually(verifyMetricsAvailable, 2*time.Minute).Should(Succeed())
 		})
 
-		It("should reconcile Dex OAuth2 clients into Dex", func() {
-			By("creating Dex connection and client resources")
-			applyYAML(fmt.Sprintf(dexClientE2EManifest, namespace))
+		It("should reconcile a DexClient into an operator-managed DexTenant", func() {
+			By("creating a DexConnector, DexTenant, Secret, and DexClient")
+			applyYAML(dexClientE2EManifest)
+			DeferCleanup(func() {
+				cmd := exec.Command("kubectl", "delete", "ns", clientTenantNamespace, "--ignore-not-found")
+				_, _ = utils.Run(cmd)
+			})
 
-			By("waiting for the DexClient to sync")
-			Eventually(dexClientCondition(namespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
+			By("waiting for the DexTenant to become ready")
+			Eventually(dexTenantCondition(clientTenantNamespace, clientTenantName, "Ready"), 3*time.Minute, time.Second).
 				Should(Equal("True"))
 
-			By("checking the client exists in Dex")
-			dexAPI, closeDex := portForwardDex()
+			By("asserting the operator deployed Dex with the pinned default image")
+			Expect(dexDeploymentImage(clientTenantNamespace, clientTenantName)).To(Equal(idpv1alpha1.DefaultDexImage))
+
+			By("waiting for the DexClient to sync")
+			Eventually(dexClientCondition(clientTenantNamespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
+				Should(Equal("True"))
+
+			By("checking the client exists in the managed Dex instance")
+			dexAPI, closeDex := portForwardService(clientTenantNamespace, clientTenantName+"-dex")
 			defer closeDex()
 
 			Eventually(func(g Gomega) {
@@ -322,7 +331,7 @@ var _ = Describe("Manager", Ordered, func() {
 			}, time.Minute, time.Second).Should(Succeed())
 
 			By("updating mutable Dex client fields")
-			patchDexClient(namespace, "e2e-app", `{
+			patchDexClient(clientTenantNamespace, "e2e-app", `{
 				"spec": {
 					"redirectURIs": ["https://app.example.com/updated-callback"],
 					"name": "Updated E2E App"
@@ -336,17 +345,17 @@ var _ = Describe("Manager", Ordered, func() {
 			}, time.Minute, time.Second).Should(Succeed())
 
 			By("rotating the Secret and observing blocked immutable change")
-			patchSecret(namespace, "e2e-app-secret", "rotated-secret")
-			Eventually(dexClientCondition(namespace, "e2e-app", "Blocked"), time.Minute, time.Second).
+			patchSecret(clientTenantNamespace, "e2e-app-secret", "rotated-secret")
+			Eventually(dexClientCondition(clientTenantNamespace, "e2e-app", "Blocked"), time.Minute, time.Second).
 				Should(Equal("True"))
 
 			By("allowing recreate for immutable change")
-			patchDexClient(namespace, "e2e-app", `{
+			patchDexClient(clientTenantNamespace, "e2e-app", `{
 				"spec": {
 					"recreateOnImmutableChange": true
 				}
 			}`)
-			Eventually(dexClientCondition(namespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
+			Eventually(dexClientCondition(clientTenantNamespace, "e2e-app", "Synced"), 2*time.Minute, time.Second).
 				Should(Equal("True"))
 			Eventually(func(g Gomega) {
 				client, err := dexAPI.GetClient(context.Background(), &dexapi.GetClientReq{Id: "e2e-app"})
@@ -355,11 +364,11 @@ var _ = Describe("Manager", Ordered, func() {
 			}, time.Minute, time.Second).Should(Succeed())
 
 			By("deleting the DexClient and verifying Dex cleanup")
-			cmd := exec.Command("kubectl", "delete", "dexclient", "e2e-app", "-n", namespace)
+			cmd := exec.Command("kubectl", "delete", "dexclient", "e2e-app", "-n", clientTenantNamespace)
 			_, err := utils.Run(cmd)
 			Expect(err).NotTo(HaveOccurred())
 			Eventually(func(g Gomega) {
-				cmd := exec.Command("kubectl", "get", "dexclient", "e2e-app", "-n", namespace)
+				cmd := exec.Command("kubectl", "get", "dexclient", "e2e-app", "-n", clientTenantNamespace)
 				_, err := utils.Run(cmd)
 				g.Expect(err).To(HaveOccurred())
 			}, time.Minute, time.Second).Should(Succeed())
@@ -383,6 +392,8 @@ var _ = Describe("Manager", Ordered, func() {
 				Should(Equal("True"))
 			Eventually(dexTenantCondition(tenantBNamespace, "tenant-b", "Ready"), 3*time.Minute, time.Second).
 				Should(Equal("True"))
+			Expect(dexDeploymentImage(tenantANamespace, "tenant-a")).To(Equal(idpv1alpha1.DefaultDexImage))
+			Expect(dexDeploymentImage(tenantBNamespace, "tenant-b")).To(Equal(idpv1alpha1.DefaultDexImage))
 
 			By("waiting for the multi-tenant DexClient to sync onto both tenants")
 			Eventually(dexClientCondition(namespace, "multi-app", "Synced"), 2*time.Minute, time.Second).
@@ -439,110 +450,48 @@ var _ = Describe("Manager", Ordered, func() {
 	})
 })
 
-const dexManifest = `apiVersion: v1
+const dexClientE2EManifest = `apiVersion: v1
 kind: Namespace
 metadata:
-  name: dex
+  name: tenant-client-e2e
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexConnector
+metadata:
+  name: tenant-client-connector
+  namespace: tenant-client-e2e
+spec:
+  connectorID: mock
+  type: mockCallback
+  displayName: Tenant Client Mock
+  config: {}
+---
+apiVersion: idp.groeneslot.nl/v1alpha1
+kind: DexTenant
+metadata:
+  name: tenant-client
+  namespace: tenant-client-e2e
+spec:
+  issuer: http://tenant-client-dex.tenant-client-e2e.svc.cluster.local:5556/dex
+  connectorRef:
+    name: tenant-client-connector
 ---
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: dex-config
-  namespace: dex
-data:
-  config.yaml: |
-    issuer: http://dex.dex.svc.cluster.local:5556/dex
-    storage:
-      type: sqlite3
-      config:
-        file: /tmp/dex.db
-    web:
-      http: 0.0.0.0:5556
-    grpc:
-      addr: 0.0.0.0:5557
-    connectors:
-    - type: mockCallback
-      id: mock
-      name: Mock
----
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: dex
-  namespace: dex
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app.kubernetes.io/name: dex
-  template:
-    metadata:
-      labels:
-        app.kubernetes.io/name: dex
-    spec:
-      containers:
-      - name: dex
-        image: ghcr.io/dexidp/dex:v2.43.1
-        command:
-        - dex
-        - serve
-        - /etc/dex/config.yaml
-        ports:
-        - name: http
-          containerPort: 5556
-        - name: grpc
-          containerPort: 5557
-        volumeMounts:
-        - name: config
-          mountPath: /etc/dex
-          readOnly: true
-      volumes:
-      - name: config
-        configMap:
-          name: dex-config
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dex
-  namespace: dex
-spec:
-  selector:
-    app.kubernetes.io/name: dex
-  ports:
-  - name: http
-    port: 5556
-    targetPort: http
-  - name: grpc
-    port: 5557
-    targetPort: grpc
-`
-
-const dexClientE2EManifest = `apiVersion: v1
 kind: Secret
 metadata:
   name: e2e-app-secret
-  namespace: %[1]s
+  namespace: tenant-client-e2e
 stringData:
   client-secret: initial-secret
----
-apiVersion: idp.groeneslot.nl/v1alpha1
-kind: DexConnection
-metadata:
-  name: dex-e2e
-  namespace: %[1]s
-spec:
-  address: dex.dex.svc.cluster.local:5557
-  plaintext: true
 ---
 apiVersion: idp.groeneslot.nl/v1alpha1
 kind: DexClient
 metadata:
   name: e2e-app
-  namespace: %[1]s
+  namespace: tenant-client-e2e
 spec:
   connectionRef:
-    name: dex-e2e
+    name: tenant-client
   clientID: e2e-app
   secret:
     valueFrom:
@@ -623,24 +572,6 @@ spec:
   name: Multi Tenant App
 `
 
-func installDex() {
-	applyYAML(dexManifest)
-
-	By("waiting for Dex deployment")
-	cmd := exec.Command("kubectl", "wait", "deployment.apps/dex",
-		"--for", "condition=Available",
-		"--namespace", dexNamespace,
-		"--timeout", "5m",
-	)
-	_, err := utils.Run(cmd)
-	Expect(err).NotTo(HaveOccurred(), "Failed waiting for Dex")
-}
-
-func uninstallDex() {
-	cmd := exec.Command("kubectl", "delete", "ns", dexNamespace, "--ignore-not-found")
-	_, _ = utils.Run(cmd)
-}
-
 func applyYAML(manifest string) {
 	cmd := exec.Command("kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(manifest)
@@ -686,8 +617,40 @@ func dexTenantCondition(namespace, name, conditionType string) func() string {
 	}
 }
 
-func portForwardDex() (dexapi.DexClient, func()) {
-	return portForwardService(dexNamespace, "dex")
+func dexDeploymentImage(namespace, tenantName string) string {
+	cmd := exec.Command("kubectl", "get", "deploy", tenantName+"-dex", "-n", namespace,
+		"-o", "jsonpath={.spec.template.spec.containers[0].image}")
+	output, err := utils.Run(cmd)
+	Expect(err).NotTo(HaveOccurred(), "Failed to read managed Dex Deployment image")
+	return output
+}
+
+func dumpNamespace(ns string) {
+	cmd := exec.Command("kubectl", "get", "ns", ns)
+	if _, err := utils.Run(cmd); err != nil {
+		return
+	}
+
+	By("Fetching events in " + ns)
+	cmd = exec.Command("kubectl", "get", "events", "-n", ns, "--sort-by=.lastTimestamp")
+	eventsOutput, err := utils.Run(cmd)
+	if err == nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Events in %s:\n%s", ns, eventsOutput)
+	}
+
+	By("Fetching Dex resources in " + ns)
+	cmd = exec.Command("kubectl", "get", "dextenant,dexconnection,dexclient,deploy,pods", "-n", ns, "-o", "wide")
+	resources, err := utils.Run(cmd)
+	if err == nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Resources in %s:\n%s", ns, resources)
+	}
+
+	By("Fetching Dex pod logs in " + ns)
+	cmd = exec.Command("kubectl", "logs", "-n", ns, "-l", "app.kubernetes.io/name=dex", "--tail=80")
+	logs, err := utils.Run(cmd)
+	if err == nil {
+		_, _ = fmt.Fprintf(GinkgoWriter, "Dex logs in %s:\n%s", ns, logs)
+	}
 }
 
 // portForwardService port-forwards to the gRPC port of the named Dex Service in namespace and

@@ -49,6 +49,11 @@ const (
 	dexConfigChecksumKey = "idp.groeneslot.nl/config-checksum"
 	dexAppName           = "dex"
 	dexConfigVolumeName  = "config"
+	// dexContainerUserID is the UID/GID of the dex user in official Dex images
+	// (dexidp/dex Dockerfile user-setup stage). Dex 2.45+ uses USER dex:dex
+	// instead of USER 1001:1001; kubelet cannot verify runAsNonRoot against a
+	// named image user, so the pod must set a numeric runAsUser.
+	dexContainerUserID int64 = 1001
 )
 
 // dexStorageResources lists every custom resource Dex's Kubernetes storage backend requires,
@@ -257,6 +262,8 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 					ServiceAccountName: name,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: new(true),
+						RunAsUser:    new(dexContainerUserID),
+						RunAsGroup:   new(dexContainerUserID),
 						SeccompProfile: &corev1.SeccompProfile{
 							Type: corev1.SeccompProfileTypeRuntimeDefault,
 						},

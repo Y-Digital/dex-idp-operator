@@ -102,6 +102,9 @@ var _ = Describe("DexTenant Controller", func() {
 				types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}, deployment)).To(Succeed())
 			Expect(deployment.Spec.Template.Annotations).To(HaveKey(dexConfigChecksumKey))
 			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(deployment.Spec.Template.Spec.SecurityContext).NotTo(BeNil())
+			Expect(deployment.Spec.Template.Spec.SecurityContext.RunAsUser).To(HaveValue(Equal(dexContainerUserID)))
+			Expect(deployment.Spec.Template.Spec.SecurityContext.RunAsGroup).To(HaveValue(Equal(dexContainerUserID)))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
 				Name:  "DEX_API_CONNECTORS_CRUD",
 				Value: strconv.FormatBool(true),
