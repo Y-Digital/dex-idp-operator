@@ -15,5 +15,9 @@ spec:
   oauth2:
     # Skip Dex's consent page only when every registered client is trusted.
     skipApprovalScreen: false
-    # Enable OAuth2 client_credentials for confidential M2M DexClients.
-    clientCredentialsEnabled: true
+    # Pass through to Dex oauth2.grantTypes. Include client_credentials for M2M.
+    grantTypes:
+      - authorization_code
+      - refresh_token
+      - client_credentials
+      - urn:ietf:params:oauth:grant-type:token-exchange

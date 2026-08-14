@@ -147,7 +147,7 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(condition.Reason).To(Equal("DexUnavailable"))
 		})
 
-		It("configures the approval screen per tenant and rolls Dex when it changes", func() {
+		It("configures oauth2 grantTypes and rolls Dex when they change", func() {
 			reconciler := newTestDexTenantReconciler(fakeDex)
 			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
@@ -162,23 +162,39 @@ var _ = Describe("DexTenant Controller", func() {
 			configMap := &corev1.ConfigMap{}
 			resourceKey := types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}
 			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
-			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("oauth2:\n  skipApprovalScreen: false\n  clientCredentialsEnabled: false"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("oauth2:\n  skipApprovalScreen: false\n"))
+			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring("grantTypes:"))
 
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
 			approvalRequiredChecksum := deployment.Spec.Template.Annotations[dexConfigChecksumKey]
+			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
+				Name:  "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT",
+				Value: "true",
+			}))
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
 			tenant.Spec.OAuth2.SkipApprovalScreen = true
-			tenant.Spec.OAuth2.ClientCredentialsEnabled = true
+			tenant.Spec.OAuth2.GrantTypes = []string{
+				"authorization_code",
+				"refresh_token",
+				"client_credentials",
+				"urn:ietf:params:oauth:grant-type:token-exchange",
+			}
 			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
 			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
 			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
-			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("oauth2:\n  skipApprovalScreen: true\n  clientCredentialsEnabled: true"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("skipApprovalScreen: true"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("grantTypes:"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("authorization_code"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("refresh_token"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("client_credentials"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("urn:ietf:params:oauth:grant-type:token-exchange"))
 			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
 			Expect(deployment.Spec.Template.Annotations[dexConfigChecksumKey]).NotTo(Equal(approvalRequiredChecksum))
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal(idpv1alpha1.DefaultDexImage))
 		})
 	})
 })

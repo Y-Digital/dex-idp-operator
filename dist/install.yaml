@@ -861,6 +861,23 @@ spec:
                 description: oauth2 configures OAuth2 server behavior for this managed
                   Dex instance.
                 properties:
+                  grantTypes:
+                    description: |-
+                      grantTypes is the Dex oauth2.grantTypes list for this instance. When empty, Dex
+                      uses its own defaults, which do not include client_credentials. Include
+                      client_credentials explicitly for machine-to-machine clients.
+                    items:
+                      enum:
+                      - authorization_code
+                      - refresh_token
+                      - password
+                      - client_credentials
+                      - implicit
+                      - urn:ietf:params:oauth:grant-type:token-exchange
+                      - urn:ietf:params:oauth:grant-type:device_code
+                      type: string
+                    type: array
+                    x-kubernetes-list-type: set
                   skipApprovalScreen:
                     description: |-
                       skipApprovalScreen skips Dex's user-facing approval screen after authentication.

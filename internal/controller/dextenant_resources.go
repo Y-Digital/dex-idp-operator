@@ -35,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/yaml"
 
 	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
 )
@@ -182,6 +183,11 @@ func (r *DexTenantReconciler) ensureStorageRBAC(ctx context.Context, tenant *idp
 	return nil
 }
 
+type dexOAuth2YAML struct {
+	SkipApprovalScreen bool     `json:"skipApprovalScreen"`
+	GrantTypes         []string `json:"grantTypes,omitempty"`
+}
+
 func dexTenantConfig(tenant *idpv1alpha1.DexTenant) string {
 	config := fmt.Sprintf(`issuer: %s
 storage:
@@ -193,13 +199,19 @@ web:
 grpc:
   addr: 0.0.0.0:5557
 `, tenant.Spec.Issuer)
-	if tenant.Spec.OAuth2 != nil {
-		config += fmt.Sprintf(`oauth2:
-  skipApprovalScreen: %t
-  clientCredentialsEnabled: %t
-`, tenant.Spec.OAuth2.SkipApprovalScreen, tenant.Spec.OAuth2.ClientCredentialsEnabled)
+	if tenant.Spec.OAuth2 == nil {
+		return config
 	}
-	return config
+	block, err := yaml.Marshal(map[string]dexOAuth2YAML{
+		"oauth2": {
+			SkipApprovalScreen: tenant.Spec.OAuth2.SkipApprovalScreen,
+			GrantTypes:         tenant.Spec.OAuth2.GrantTypes,
+		},
+	})
+	if err != nil {
+		return config + fmt.Sprintf("oauth2:\n  skipApprovalScreen: %t\n", tenant.Spec.OAuth2.SkipApprovalScreen)
+	}
+	return config + string(block)
 }
 
 func (r *DexTenantReconciler) ensureConfigMap(ctx context.Context, tenant *idpv1alpha1.DexTenant) error {
@@ -253,6 +265,7 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 							Command: []string{dexAppName, "serve", "/etc/dex/config.yaml"},
 							Env: []corev1.EnvVar{
 								{Name: "DEX_API_CONNECTORS_CRUD", Value: "true"},
+								{Name: "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT", Value: "true"},
 							},
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 5556},
