@@ -27,6 +27,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -162,6 +164,72 @@ var _ = Describe("DexClient Controller", func() {
 			Expect(fakeDex.clients[exampleApp].GetSecret()).To(Equal("old-secret"))
 		})
 
+		It("recreates the Dex client when recreateOnImmutableChange is set", func() {
+			fakeDex.clients[exampleApp] = &dexapi.Client{
+				Id:           exampleApp,
+				Secret:       "old-secret",
+				RedirectUris: []string{exampleCallback},
+				Name:         "Example App",
+			}
+
+			resource := &idpv1alpha1.DexClient{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+			resource.Spec.RecreateOnImmutableChange = true
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+
+			controllerReconciler := newTestDexClientReconciler(fakeDex)
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			created := fakeDex.clients[exampleApp]
+			Expect(created).NotTo(BeNil())
+			Expect(created.GetSecret()).To(Equal(secretValue))
+
+			updated := &idpv1alpha1.DexClient{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			synced := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+			Expect(synced).NotTo(BeNil())
+			Expect(synced.Status).To(Equal(metav1.ConditionTrue))
+			blocked := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionBlocked)
+			Expect(blocked).NotTo(BeNil())
+			Expect(blocked.Status).To(Equal(metav1.ConditionFalse))
+		})
+
+		It("updates mutable Dex client fields", func() {
+			controllerReconciler := newTestDexClientReconciler(fakeDex)
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			resource := &idpv1alpha1.DexClient{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, resource)).To(Succeed())
+			resource.Spec.RedirectURIs = []string{"https://app.example.com/new-callback"}
+			resource.Spec.TrustedPeers = []string{"peer-app"}
+			resource.Spec.Name = "Renamed App"
+			resource.Spec.LogoURL = "https://app.example.com/logo.png"
+			Expect(k8sClient.Update(ctx, resource)).To(Succeed())
+
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			updatedClient := fakeDex.clients[exampleApp]
+			Expect(updatedClient).NotTo(BeNil())
+			Expect(updatedClient.GetSecret()).To(Equal(secretValue))
+			Expect(updatedClient.GetRedirectUris()).To(Equal([]string{"https://app.example.com/new-callback"}))
+			Expect(updatedClient.GetTrustedPeers()).To(Equal([]string{"peer-app"}))
+			Expect(updatedClient.GetName()).To(Equal("Renamed App"))
+			Expect(updatedClient.GetLogoUrl()).To(Equal("https://app.example.com/logo.png"))
+
+			updated := &idpv1alpha1.DexClient{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			synced := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+			Expect(synced).NotTo(BeNil())
+			Expect(synced.Status).To(Equal(metav1.ConditionTrue))
+		})
+
 		It("deletes the Dex client during finalizer cleanup", func() {
 			fakeDex.clients[exampleApp] = &dexapi.Client{Id: exampleApp, Secret: secretValue}
 			controllerReconciler := newTestDexClientReconciler(fakeDex)
@@ -181,6 +249,285 @@ var _ = Describe("DexClient Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(fakeDex.clients).NotTo(HaveKey(exampleApp))
 		})
+	})
+})
+
+var _ = Describe("DexClient Controller public client", func() {
+	const (
+		resourceName      = "public-client"
+		connectionName    = "public-connection"
+		resourceNamespace = "default"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+	fakeDex := newFakeDexClient()
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+		fakeDex = newFakeDexClient()
+
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
+			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
+			Spec:       idpv1alpha1.DexConnectionSpec{Address: "dex.example.com:5557", Plaintext: true},
+		})).To(Succeed())
+
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				ConnectionRef: &corev1.LocalObjectReference{Name: connectionName},
+				ClientID:      "public-app",
+				Public:        true,
+				RedirectURIs:  []string{exampleCallback},
+				Name:          "Public App",
+			},
+		})).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+	})
+
+	It("syncs a public client without a client secret", func() {
+		controllerReconciler := newTestDexClientReconciler(fakeDex)
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		created := fakeDex.clients["public-app"]
+		Expect(created).NotTo(BeNil())
+		Expect(created.GetPublic()).To(BeTrue())
+		Expect(created.GetSecret()).To(BeEmpty())
+
+		secrets := &corev1.SecretList{}
+		Expect(k8sClient.List(ctx, secrets, client.InNamespace(resourceNamespace))).To(Succeed())
+		Expect(secrets.Items).To(BeEmpty())
+
+		updated := &idpv1alpha1.DexClient{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		synced := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+		Expect(synced).NotTo(BeNil())
+		Expect(synced.Status).To(Equal(metav1.ConditionTrue))
+	})
+})
+
+var _ = Describe("DexClient Controller with inline secret value", func() {
+	const (
+		resourceName      = "inline-secret-client"
+		connectionName    = "inline-connection"
+		resourceNamespace = "default"
+		inlineSecret      = "inline-super-secret"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+	fakeDex := newFakeDexClient()
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+		fakeDex = newFakeDexClient()
+
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
+			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
+			Spec:       idpv1alpha1.DexConnectionSpec{Address: "dex.example.com:5557", Plaintext: true},
+		})).To(Succeed())
+
+		secretValue := inlineSecret
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				ConnectionRef: &corev1.LocalObjectReference{Name: connectionName},
+				ClientID:      "inline-app",
+				Secret:        &idpv1alpha1.ValueSource{Value: &secretValue},
+				RedirectURIs:  []string{exampleCallback},
+				Name:          "Inline App",
+			},
+		})).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+	})
+
+	It("creates a Dex client from an inline ValueSource", func() {
+		controllerReconciler := newTestDexClientReconciler(fakeDex)
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		created := fakeDex.clients["inline-app"]
+		Expect(created).NotTo(BeNil())
+		Expect(created.GetSecret()).To(Equal(inlineSecret))
+	})
+})
+
+var _ = Describe("DexClient Controller resolve failures", func() {
+	const (
+		resourceName      = "unready-tenant-app"
+		resourceNamespace = "default"
+		tenantName        = "unready-tenant"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexTenant{
+			ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexTenantSpec{
+				Issuer:       "https://unready.example.com/dex",
+				ConnectorRef: corev1.LocalObjectReference{Name: tenantName + "-connector"},
+			},
+		})).To(Succeed())
+
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				TenantRefs:   []idpv1alpha1.DexTenantReference{{Name: tenantName}},
+				ClientID:     "unready-app",
+				RedirectURIs: []string{exampleCallback},
+				Name:         "Unready App",
+			},
+		})).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+	})
+
+	It("reports ResolveFailed when a tenant has no Dex connection yet", func() {
+		controllerReconciler := newTestDexClientReconciler(newFakeDexClient())
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).To(HaveOccurred())
+		Expect(err.Error()).To(ContainSubstring("does not have a ready Dex connection yet"))
+
+		updated := &idpv1alpha1.DexClient{}
+		Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+		Expect(updated.Status.Mounts).To(HaveLen(1))
+		Expect(updated.Status.Mounts[0].Ready).To(BeFalse())
+		Expect(updated.Status.Mounts[0].Reason).To(Equal("ResolveFailed"))
+		synced := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionSynced)
+		Expect(synced).NotTo(BeNil())
+		Expect(synced.Status).To(Equal(metav1.ConditionFalse))
+	})
+})
+
+var _ = Describe("DexClient Controller TLS dialConfig", func() {
+	const (
+		resourceName      = "tls-client"
+		connectionName    = "tls-connection"
+		resourceNamespace = "default"
+		caSecretName      = "dex-ca"
+		certSecretName    = "dex-client-tls"
+	)
+
+	ctx := context.Background()
+	typeNamespacedName := types.NamespacedName{Name: resourceName, Namespace: resourceNamespace}
+	fakeDex := newFakeDexClient()
+	caPEM := []byte("-----BEGIN CERTIFICATE-----\nCA\n-----END CERTIFICATE-----")
+	certPEM := []byte("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----")
+	keyPEM := []byte("-----BEGIN PRIVATE KEY-----\nKEY\n-----END PRIVATE KEY-----")
+
+	BeforeEach(func() {
+		cleanupDexClientTestResources(ctx)
+		fakeDex = newFakeDexClient()
+
+		Expect(k8sClient.Create(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: caSecretName, Namespace: resourceNamespace},
+			Data:       map[string][]byte{"ca.crt": caPEM},
+		})).To(Succeed())
+		Expect(k8sClient.Create(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: certSecretName, Namespace: resourceNamespace},
+			Data: map[string][]byte{
+				"tls.crt": certPEM,
+				"tls.key": keyPEM,
+			},
+		})).To(Succeed())
+
+		createTLSDexConnection(ctx, &idpv1alpha1.DexConnection{
+			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexConnectionSpec{
+				Address: "dex.example.com:5557",
+				TLS: &idpv1alpha1.DexConnectionTLSConfig{
+					CA: &idpv1alpha1.ValueSource{
+						ValueFrom: &idpv1alpha1.SecretValueSource{
+							SecretKeyRef: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: caSecretName},
+								Key:                  "ca.crt",
+							},
+						},
+					},
+					ClientCertificate: &idpv1alpha1.DexConnectionClientCertificate{
+						Certificate: idpv1alpha1.ValueSource{
+							ValueFrom: &idpv1alpha1.SecretValueSource{
+								SecretKeyRef: corev1.SecretKeySelector{
+									LocalObjectReference: corev1.LocalObjectReference{Name: certSecretName},
+									Key:                  "tls.crt",
+								},
+							},
+						},
+						PrivateKey: idpv1alpha1.ValueSource{
+							ValueFrom: &idpv1alpha1.SecretValueSource{
+								SecretKeyRef: corev1.SecretKeySelector{
+									LocalObjectReference: corev1.LocalObjectReference{Name: certSecretName},
+									Key:                  "tls.key",
+								},
+							},
+						},
+					},
+					InsecureSkipVerify: true,
+					ServerName:         "dex.example.com",
+				},
+			},
+		})
+
+		secretValue := "tls-client-secret"
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
+			ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
+			Spec: idpv1alpha1.DexClientSpec{
+				ConnectionRef: &corev1.LocalObjectReference{Name: connectionName},
+				ClientID:      "tls-app",
+				Secret:        &idpv1alpha1.ValueSource{Value: &secretValue},
+				RedirectURIs:  []string{exampleCallback},
+				Name:          "TLS App",
+			},
+		})).To(Succeed())
+	})
+
+	AfterEach(func() {
+		cleanupDexClientTestResources(ctx)
+	})
+
+	It("builds TLS dial config from DexConnection secrets", func() {
+		var captured dex.DialConfig
+		controllerReconciler := &DexClientReconciler{
+			Client: k8sClient,
+			Scheme: k8sClient.Scheme(),
+			ClientFactory: func(_ context.Context, cfg dex.DialConfig) (dex.Client, error) {
+				captured = cfg
+				return fakeDex, nil
+			},
+		}
+
+		_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(captured.Address).To(Equal("dex.example.com:5557"))
+		Expect(captured.Plaintext).To(BeFalse())
+		Expect(captured.TLS.CACertPEM).To(Equal(caPEM))
+		Expect(captured.TLS.ClientCertPEM).To(Equal(certPEM))
+		Expect(captured.TLS.ClientKeyPEM).To(Equal(keyPEM))
+		Expect(captured.TLS.InsecureSkipVerify).To(BeTrue())
+		Expect(captured.TLS.ServerName).To(Equal("dex.example.com"))
+		Expect(fakeDex.clients).To(HaveKey("tls-app"))
 	})
 })
 
@@ -372,6 +719,19 @@ var _ = Describe("DexClient Controller with cross-namespace tenantRefs", func() 
 
 // createReadyTenant creates a DexConnection and a DexTenant whose status already points at it,
 // simulating a DexTenant whose managed Dex instance is up and running.
+// createTLSDexConnection creates a DexConnection with TLS enabled. The CRD CEL rule
+// evaluates self.plaintext, so the field must be present as false; the Go omitempty
+// tag would otherwise omit it and admission would reject the object.
+func createTLSDexConnection(ctx context.Context, connection *idpv1alpha1.DexConnection) {
+	connection.SetGroupVersionKind(idpv1alpha1.GroupVersion.WithKind("DexConnection"))
+	raw, err := runtime.DefaultUnstructuredConverter.ToUnstructured(connection)
+	Expect(err).NotTo(HaveOccurred())
+	spec, ok := raw["spec"].(map[string]any)
+	Expect(ok).To(BeTrue())
+	spec["plaintext"] = false
+	Expect(k8sClient.Create(ctx, &unstructured.Unstructured{Object: raw})).To(Succeed())
+}
+
 func createReadyTenant(ctx context.Context, namespace, tenantName string) {
 	connection := &idpv1alpha1.DexConnection{
 		ObjectMeta: metav1.ObjectMeta{Name: tenantName, Namespace: namespace},
@@ -425,10 +785,11 @@ func newTestDexClientReconciler(fakeDex *fakeDexClient) *DexClientReconciler {
 }
 
 type fakeDexClient struct {
-	clients     map[string]*dexapi.Client
-	connectors  map[string]*dexapi.Connector
-	unreachable bool
-	closed      bool
+	clients            map[string]*dexapi.Client
+	connectors         map[string]*dexapi.Connector
+	unreachable        bool
+	closed             bool
+	updateConnectorErr error
 }
 
 func newFakeDexClient() *fakeDexClient {
@@ -490,6 +851,9 @@ func (f *fakeDexClient) CreateConnector(_ context.Context, connector *dexapi.Con
 }
 
 func (f *fakeDexClient) UpdateConnector(_ context.Context, req *dexapi.UpdateConnectorReq) error {
+	if f.updateConnectorErr != nil {
+		return f.updateConnectorErr
+	}
 	connector, ok := f.connectors[req.GetId()]
 	if !ok {
 		return dex.ErrNotFound

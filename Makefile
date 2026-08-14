@@ -62,6 +62,16 @@ vet: ## Run go vet against code.
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
 	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	@echo
+	@echo "Coverage summary:"
+	@LC_ALL=C awk 'NR==1 { next } { split($$1, a, ":"); pkg=a[1]; sub(/\/[^\/]+$$/, "", pkg); s[pkg]+=$$2; if ($$3+0>0) c[pkg]+=$$2; ts+=$$2; if ($$3+0>0) tc+=$$2 } END { for (p in s) if (p ~ /\/internal\/(controller|dex)$$/) printf "  %s: %.1f%% of statements\n", p, 100*c[p]/s[p]; printf "  total: %.1f%% of statements\n", (ts==0)?0:100*tc/ts }' cover.out
+	@echo "Per-function report: make coverage   HTML: go tool cover -html=cover.out"
+
+.PHONY: coverage
+coverage: test ## Show per-function coverage for operator packages.
+	go tool cover -func=cover.out
+	@echo
+	@echo "HTML report: go tool cover -html=cover.out"
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.

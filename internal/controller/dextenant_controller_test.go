@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"strconv"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,6 +26,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -118,6 +120,14 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(connection.Spec.Plaintext).To(BeTrue())
 			Expect(connection.Spec.Address).To(Equal(resourceName2 + "." + resourceNamespace + ".svc.cluster.local:5557"))
 
+			By("ensuring Dex Kubernetes storage CRDs")
+			for _, resource := range dexStorageResources {
+				crd := &apiextensionsv1.CustomResourceDefinition{}
+				Expect(k8sClient.Get(ctx, types.NamespacedName{
+					Name: resource.Plural + "." + dexStorageAPIGroup,
+				}, crd)).To(Succeed())
+			}
+
 			By("pre-seeding the connector into Dex Kubernetes storage")
 			Eventually(func(g Gomega) {
 				seeded := &unstructured.Unstructured{}
@@ -142,8 +152,9 @@ var _ = Describe("DexTenant Controller", func() {
 		It("reports NotReady while the managed Dex instance is unreachable", func() {
 			fakeDex.unreachable = true
 			reconciler := newTestDexTenantReconciler(fakeDex)
-			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(dexUnavailableRequeueInterval))
 
 			updated := &idpv1alpha1.DexTenant{}
 			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
@@ -151,6 +162,113 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(condition).NotTo(BeNil())
 			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
 			Expect(condition.Reason).To(Equal("DexUnavailable"))
+		})
+
+		It("reports NotReady when the Dex client factory fails to dial", func() {
+			reconciler := &DexTenantReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+				ClientFactory: func(context.Context, dex.DialConfig) (dex.Client, error) {
+					return nil, errors.New("dial refused")
+				},
+			}
+			result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.RequeueAfter).To(Equal(dexUnavailableRequeueInterval))
+
+			updated := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("DexUnavailable"))
+		})
+
+		It("reports ConnectorNotFound when the referenced connector is missing", func() {
+			Expect(k8sClient.DeleteAllOf(ctx, &idpv1alpha1.DexConnector{}, client.InNamespace(resourceNamespace))).To(Succeed())
+			Eventually(func(g Gomega) {
+				connectors := &idpv1alpha1.DexConnectorList{}
+				g.Expect(k8sClient.List(ctx, connectors, client.InNamespace(resourceNamespace))).To(Succeed())
+				g.Expect(connectors.Items).To(BeEmpty())
+			}).Should(Succeed())
+
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).To(HaveOccurred())
+
+			updated := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("ConnectorNotFound"))
+		})
+
+		It("reports ConnectorInvalid when the connector secretRef cannot be resolved", func() {
+			connector := &idpv1alpha1.DexConnector{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Name: connectorName, Namespace: resourceNamespace,
+			}, connector)).To(Succeed())
+			connector.Spec.Config = runtime.RawExtension{Raw: []byte(`{"clientSecret":"${missing}"}`)}
+			connector.Spec.SecretRefs = []idpv1alpha1.DexConnectorSecretRef{
+				{
+					Name: "missing",
+					ValueFrom: idpv1alpha1.SecretValueSource{
+						SecretKeyRef: corev1.SecretKeySelector{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "does-not-exist"},
+							Key:                  "value",
+						},
+					},
+				},
+			}
+			Expect(k8sClient.Update(ctx, connector)).To(Succeed())
+
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).To(HaveOccurred())
+
+			updated := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("ConnectorInvalid"))
+		})
+
+		It("reports ConnectorSyncFailed when Dex connector gRPC sync fails", func() {
+			fakeDex.updateConnectorErr = errors.New("sync boom")
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("sync boom"))
+
+			updated := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal("ConnectorSyncFailed"))
+		})
+
+		It("applies a custom Dex image and replica count", func() {
+			customImage := "example.com/dex:testdev"
+			replicas := int32(3)
+			tenant := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Spec.Image = customImage
+			tenant.Spec.Replicas = &replicas
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: resourceNamespace, Name: resourceName2,
+			}, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal(customImage))
+			Expect(deployment.Spec.Replicas).To(HaveValue(Equal(replicas)))
 		})
 
 		It("configures oauth2 grantTypes and rolls Dex when they change", func() {
