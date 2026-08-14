@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"strconv"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -86,8 +87,10 @@ var _ = Describe("DexTenant Controller", func() {
 			By("creating the ServiceAccount, RBAC, ConfigMap, Deployment, and Service")
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&corev1.ServiceAccount{})).To(Succeed())
+			role := &rbacv1.Role{}
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
-				&rbacv1.Role{})).To(Succeed())
+				role)).To(Succeed())
+			Expect(role.Rules[0].Resources).To(ContainElements("useridentities", "authsessions"))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&rbacv1.RoleBinding{})).To(Succeed())
 			configMap := &corev1.ConfigMap{}
@@ -101,7 +104,7 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(deployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
 				Name:  "DEX_API_CONNECTORS_CRUD",
-				Value: "true",
+				Value: strconv.FormatBool(true),
 			}))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&corev1.Service{})).To(Succeed())
@@ -170,7 +173,7 @@ var _ = Describe("DexTenant Controller", func() {
 			approvalRequiredChecksum := deployment.Spec.Template.Annotations[dexConfigChecksumKey]
 			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
 				Name:  "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT",
-				Value: "true",
+				Value: strconv.FormatBool(true),
 			}))
 
 			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())

@@ -21,6 +21,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"strconv"
 
 	dexapi "github.com/dexidp/dex/api/v2"
 	appsv1 "k8s.io/api/apps/v1"
@@ -67,6 +68,8 @@ var dexStorageResources = []struct {
 	{"connectors", "connector", "Connector"},
 	{"devicerequests", "devicerequest", "DeviceRequest"},
 	{"devicetokens", "devicetoken", "DeviceToken"},
+	{"useridentities", "useridentity", "UserIdentity"},
+	{"authsessions", "authsession", "AuthSession"},
 }
 
 // ensureDexStorageCRDs makes sure the CRDs required by Dex's Kubernetes storage backend
@@ -264,8 +267,8 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 							Image:   image,
 							Command: []string{dexAppName, "serve", "/etc/dex/config.yaml"},
 							Env: []corev1.EnvVar{
-								{Name: "DEX_API_CONNECTORS_CRUD", Value: "true"},
-								{Name: "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT", Value: "true"},
+								{Name: "DEX_API_CONNECTORS_CRUD", Value: strconv.FormatBool(true)},
+								{Name: "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT", Value: strconv.FormatBool(true)},
 							},
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 5556},

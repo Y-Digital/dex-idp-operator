@@ -53,6 +53,7 @@ rules:
   resources:
   - authcodes
   - authrequests
+  - authsessions
   - connectors
   - devicerequests
   - devicetokens
@@ -61,6 +62,7 @@ rules:
   - passwords
   - refreshtokens
   - signingkeies
+  - useridentities
   verbs:
   - create
   - delete
