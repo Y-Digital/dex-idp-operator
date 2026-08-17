@@ -19,8 +19,8 @@ env:
   # Container image and Helm chart MUST use different OCI repositories.
   # helm push to oci://ghcr.io/<owner> publishes as <owner>/<chart-name>:version and
   # would overwrite the container image at ghcr.io/<owner>/<repo>:version.
-  IMAGE: ghcr.io/${{ github.repository }}
-  CHART_OCI: oci://ghcr.io/${{ github.repository_owner }}/charts
+  IMAGE: ghcr.io/y-digital/dex-idp-operator
+  CHART_OCI: oci://ghcr.io/y-digital/charts
   CHART_DIR: dist/chart
 
 jobs:
