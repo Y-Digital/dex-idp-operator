@@ -41,6 +41,7 @@ import (
 
 const exampleApp string = "example-app"
 const exampleCallback string = "https://app.example.com/callback"
+const exampleAppName string = "Example App"
 
 var _ = Describe("DexClient Controller", func() {
 	Context("When reconciling a resource", func() {
@@ -70,7 +71,7 @@ var _ = Describe("DexClient Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: idpv1alpha1.DexConnectionSpec{
-					Address:   "dex.example.com:5557",
+					Address:   testDexAddress,
 					Plaintext: true,
 				},
 			}
@@ -79,11 +80,11 @@ var _ = Describe("DexClient Controller", func() {
 			By("creating the client secret")
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "client-secret",
+					Name:      generatedSecretKey,
 					Namespace: resourceNamespace,
 				},
 				Data: map[string][]byte{
-					"secret": []byte(secretValue),
+					providedSecretKey: []byte(secretValue),
 				},
 			}
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
@@ -100,13 +101,13 @@ var _ = Describe("DexClient Controller", func() {
 					Secret: &idpv1alpha1.ValueSource{
 						ValueFrom: &idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{Name: "client-secret"},
-								Key:                  "secret",
+								LocalObjectReference: corev1.LocalObjectReference{Name: generatedSecretKey},
+								Key:                  providedSecretKey,
 							},
 						},
 					},
 					RedirectURIs: []string{exampleCallback},
-					Name:         "Example App",
+					Name:         exampleAppName,
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -144,7 +145,7 @@ var _ = Describe("DexClient Controller", func() {
 				Id:           exampleApp,
 				Secret:       "old-secret",
 				RedirectUris: []string{exampleCallback},
-				Name:         "Example App",
+				Name:         exampleAppName,
 			}
 			controllerReconciler := newTestDexClientReconciler(fakeDex)
 
@@ -169,7 +170,7 @@ var _ = Describe("DexClient Controller", func() {
 				Id:           exampleApp,
 				Secret:       "old-secret",
 				RedirectUris: []string{exampleCallback},
-				Name:         "Example App",
+				Name:         exampleAppName,
 			}
 
 			resource := &idpv1alpha1.DexClient{}
@@ -269,7 +270,7 @@ var _ = Describe("DexClient Controller public client", func() {
 
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
 			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
-			Spec:       idpv1alpha1.DexConnectionSpec{Address: "dex.example.com:5557", Plaintext: true},
+			Spec:       idpv1alpha1.DexConnectionSpec{Address: testDexAddress, Plaintext: true},
 		})).To(Succeed())
 
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
@@ -330,7 +331,7 @@ var _ = Describe("DexClient Controller with inline secret value", func() {
 
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
 			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
-			Spec:       idpv1alpha1.DexConnectionSpec{Address: "dex.example.com:5557", Plaintext: true},
+			Spec:       idpv1alpha1.DexConnectionSpec{Address: testDexAddress, Plaintext: true},
 		})).To(Succeed())
 
 		secretValue := inlineSecret
@@ -440,7 +441,7 @@ var _ = Describe("DexClient Controller TLS dialConfig", func() {
 
 		Expect(k8sClient.Create(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: caSecretName, Namespace: resourceNamespace},
-			Data:       map[string][]byte{"ca.crt": caPEM},
+			Data:       map[string][]byte{caCertKey: caPEM},
 		})).To(Succeed())
 		Expect(k8sClient.Create(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: certSecretName, Namespace: resourceNamespace},
@@ -453,13 +454,13 @@ var _ = Describe("DexClient Controller TLS dialConfig", func() {
 		createTLSDexConnection(ctx, &idpv1alpha1.DexConnection{
 			ObjectMeta: metav1.ObjectMeta{Name: connectionName, Namespace: resourceNamespace},
 			Spec: idpv1alpha1.DexConnectionSpec{
-				Address: "dex.example.com:5557",
+				Address: testDexAddress,
 				TLS: &idpv1alpha1.DexConnectionTLSConfig{
 					CA: &idpv1alpha1.ValueSource{
 						ValueFrom: &idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
 								LocalObjectReference: corev1.LocalObjectReference{Name: caSecretName},
-								Key:                  "ca.crt",
+								Key:                  caCertKey,
 							},
 						},
 					},
@@ -520,7 +521,7 @@ var _ = Describe("DexClient Controller TLS dialConfig", func() {
 		_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
 		Expect(err).NotTo(HaveOccurred())
 
-		Expect(captured.Address).To(Equal("dex.example.com:5557"))
+		Expect(captured.Address).To(Equal(testDexAddress))
 		Expect(captured.Plaintext).To(BeFalse())
 		Expect(captured.TLS.CACertPEM).To(Equal(caPEM))
 		Expect(captured.TLS.ClientCertPEM).To(Equal(certPEM))

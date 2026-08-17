@@ -34,8 +34,14 @@ import (
 
 var _ = Describe("Watch mappers", func() {
 	const (
-		namespace       = "default"
-		mapperNamespace = "watch-mapper-ns"
+		namespace            = "default"
+		mapperNamespace      = "watch-mapper-ns"
+		mapConnectorName     = "map-connector"
+		secretConnectorName  = "secret-connector"
+		oidcSecretName       = "oidc-secret"
+		mapConnectionName    = "map-connection"
+		crossTenantName      = "cross-tenant"
+		watchedConnectorName = "watched-connector"
 	)
 
 	ctx := context.Background()
@@ -56,10 +62,10 @@ var _ = Describe("Watch mappers", func() {
 
 	It("maps a DexConnector change to referencing DexTenants", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnector{
-			ObjectMeta: metav1.ObjectMeta{Name: "map-connector", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: mapConnectorName, Namespace: namespace},
 			Spec: idpv1alpha1.DexConnectorSpec{
-				ConnectorID: "map-connector",
-				Type:        "oidc",
+				ConnectorID: mapConnectorName,
+				Type:        oidcType,
 				Config:      runtime.RawExtension{Raw: []byte(`{}`)},
 			},
 		})).To(Succeed())
@@ -67,7 +73,7 @@ var _ = Describe("Watch mappers", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "map-tenant", Namespace: namespace},
 			Spec: idpv1alpha1.DexTenantSpec{
 				Issuer:       "https://map.example.com/dex",
-				ConnectorRef: corev1.LocalObjectReference{Name: "map-connector"},
+				ConnectorRef: corev1.LocalObjectReference{Name: mapConnectorName},
 			},
 		})).To(Succeed())
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexTenant{
@@ -80,7 +86,7 @@ var _ = Describe("Watch mappers", func() {
 
 		reconciler := &DexTenantReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		requests := reconciler.dexTenantsForConnector(ctx, &idpv1alpha1.DexConnector{
-			ObjectMeta: metav1.ObjectMeta{Name: "map-connector", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: mapConnectorName, Namespace: namespace},
 		})
 		Expect(requests).To(ConsistOf(reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "map-tenant"},
@@ -89,18 +95,18 @@ var _ = Describe("Watch mappers", func() {
 
 	It("maps a Secret change to DexTenants whose connector interpolates it", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnector{
-			ObjectMeta: metav1.ObjectMeta{Name: "secret-connector", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: secretConnectorName, Namespace: namespace},
 			Spec: idpv1alpha1.DexConnectorSpec{
-				ConnectorID: "secret-connector",
-				Type:        "oidc",
+				ConnectorID: secretConnectorName,
+				Type:        oidcType,
 				Config:      runtime.RawExtension{Raw: []byte(`{"clientSecret":"${oidcSecret}"}`)},
 				SecretRefs: []idpv1alpha1.DexConnectorSecretRef{
 					{
-						Name: "oidcSecret",
+						Name: oidcSecretRef,
 						ValueFrom: idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{Name: "oidc-secret"},
-								Key:                  "clientSecret",
+								LocalObjectReference: corev1.LocalObjectReference{Name: oidcSecretName},
+								Key:                  oidcSecretKey,
 							},
 						},
 					},
@@ -111,13 +117,13 @@ var _ = Describe("Watch mappers", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "secret-tenant", Namespace: namespace},
 			Spec: idpv1alpha1.DexTenantSpec{
 				Issuer:       "https://secret.example.com/dex",
-				ConnectorRef: corev1.LocalObjectReference{Name: "secret-connector"},
+				ConnectorRef: corev1.LocalObjectReference{Name: secretConnectorName},
 			},
 		})).To(Succeed())
 
 		reconciler := &DexTenantReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		requests := reconciler.dexTenantsForSecret(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "oidc-secret", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: oidcSecretName, Namespace: namespace},
 		})
 		Expect(requests).To(ConsistOf(reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "secret-tenant"},
@@ -129,14 +135,14 @@ var _ = Describe("Watch mappers", func() {
 
 	It("maps a DexConnection change to DexClients that reference it", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
-			ObjectMeta: metav1.ObjectMeta{Name: "map-connection", Namespace: namespace},
-			Spec:       idpv1alpha1.DexConnectionSpec{Address: "dex.example.com:5557", Plaintext: true},
+			ObjectMeta: metav1.ObjectMeta{Name: mapConnectionName, Namespace: namespace},
+			Spec:       idpv1alpha1.DexConnectionSpec{Address: testDexAddress, Plaintext: true},
 		})).To(Succeed())
 		secretValue := "s"
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexClient{
 			ObjectMeta: metav1.ObjectMeta{Name: "map-client", Namespace: namespace},
 			Spec: idpv1alpha1.DexClientSpec{
-				ConnectionRef: &corev1.LocalObjectReference{Name: "map-connection"},
+				ConnectionRef: &corev1.LocalObjectReference{Name: mapConnectionName},
 				ClientID:      "map-app",
 				Secret:        &idpv1alpha1.ValueSource{Value: &secretValue},
 			},
@@ -144,7 +150,7 @@ var _ = Describe("Watch mappers", func() {
 
 		reconciler := &DexClientReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		requests := reconciler.dexClientsForConnection(ctx, &idpv1alpha1.DexConnection{
-			ObjectMeta: metav1.ObjectMeta{Name: "map-connection", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: mapConnectionName, Namespace: namespace},
 		})
 		Expect(requests).To(ConsistOf(reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "map-client"},
@@ -153,7 +159,7 @@ var _ = Describe("Watch mappers", func() {
 
 	It("maps a DexTenant change to DexClients across namespaces", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexTenant{
-			ObjectMeta: metav1.ObjectMeta{Name: "cross-tenant", Namespace: mapperNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: crossTenantName, Namespace: mapperNamespace},
 			Spec: idpv1alpha1.DexTenantSpec{
 				Issuer:       "https://cross.example.com/dex",
 				ConnectorRef: corev1.LocalObjectReference{Name: "cross-connector"},
@@ -163,7 +169,7 @@ var _ = Describe("Watch mappers", func() {
 			ObjectMeta: metav1.ObjectMeta{Name: "cross-client", Namespace: namespace},
 			Spec: idpv1alpha1.DexClientSpec{
 				TenantRefs: []idpv1alpha1.DexTenantReference{
-					{Name: "cross-tenant", Namespace: mapperNamespace},
+					{Name: crossTenantName, Namespace: mapperNamespace},
 				},
 				ClientID: "cross-app",
 			},
@@ -171,7 +177,7 @@ var _ = Describe("Watch mappers", func() {
 
 		reconciler := &DexClientReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		requests := reconciler.dexClientsForTenant(ctx, &idpv1alpha1.DexTenant{
-			ObjectMeta: metav1.ObjectMeta{Name: "cross-tenant", Namespace: mapperNamespace},
+			ObjectMeta: metav1.ObjectMeta{Name: crossTenantName, Namespace: mapperNamespace},
 		})
 		Expect(requests).To(ConsistOf(reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "cross-client"},
@@ -188,8 +194,8 @@ var _ = Describe("Watch mappers", func() {
 				Secret: &idpv1alpha1.ValueSource{
 					ValueFrom: &idpv1alpha1.SecretValueSource{
 						SecretKeyRef: corev1.SecretKeySelector{
-							LocalObjectReference: corev1.LocalObjectReference{Name: "client-secret"},
-							Key:                  "secret",
+							LocalObjectReference: corev1.LocalObjectReference{Name: generatedSecretKey},
+							Key:                  providedSecretKey,
 						},
 					},
 				},
@@ -198,13 +204,13 @@ var _ = Describe("Watch mappers", func() {
 		createTLSDexConnection(ctx, &idpv1alpha1.DexConnection{
 			ObjectMeta: metav1.ObjectMeta{Name: "tls-connection", Namespace: namespace},
 			Spec: idpv1alpha1.DexConnectionSpec{
-				Address: "dex.example.com:5557",
+				Address: testDexAddress,
 				TLS: &idpv1alpha1.DexConnectionTLSConfig{
 					CA: &idpv1alpha1.ValueSource{
 						ValueFrom: &idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
 								LocalObjectReference: corev1.LocalObjectReference{Name: "dex-ca"},
-								Key:                  "ca.crt",
+								Key:                  caCertKey,
 							},
 						},
 					},
@@ -222,7 +228,7 @@ var _ = Describe("Watch mappers", func() {
 
 		reconciler := &DexClientReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		Expect(reconciler.dexClientsForSecret(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "client-secret", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: generatedSecretKey, Namespace: namespace},
 		})).To(ConsistOf(reconcile.Request{
 			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "secret-client"},
 		}))
@@ -235,18 +241,18 @@ var _ = Describe("Watch mappers", func() {
 
 	It("maps a Secret change to DexConnectors that interpolate it", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnector{
-			ObjectMeta: metav1.ObjectMeta{Name: "watched-connector", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: watchedConnectorName, Namespace: namespace},
 			Spec: idpv1alpha1.DexConnectorSpec{
-				ConnectorID: "watched-connector",
-				Type:        "oidc",
+				ConnectorID: watchedConnectorName,
+				Type:        oidcType,
 				Config:      runtime.RawExtension{Raw: []byte(`{"clientSecret":"${oidcSecret}"}`)},
 				SecretRefs: []idpv1alpha1.DexConnectorSecretRef{
 					{
-						Name: "oidcSecret",
+						Name: oidcSecretRef,
 						ValueFrom: idpv1alpha1.SecretValueSource{
 							SecretKeyRef: corev1.SecretKeySelector{
-								LocalObjectReference: corev1.LocalObjectReference{Name: "oidc-secret"},
-								Key:                  "clientSecret",
+								LocalObjectReference: corev1.LocalObjectReference{Name: oidcSecretName},
+								Key:                  oidcSecretKey,
 							},
 						},
 					},
@@ -256,9 +262,9 @@ var _ = Describe("Watch mappers", func() {
 
 		reconciler := &DexConnectorReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
 		Expect(reconciler.dexConnectorsForSecret(ctx, &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: "oidc-secret", Namespace: namespace},
+			ObjectMeta: metav1.ObjectMeta{Name: oidcSecretName, Namespace: namespace},
 		})).To(ConsistOf(reconcile.Request{
-			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "watched-connector"},
+			NamespacedName: types.NamespacedName{Namespace: namespace, Name: watchedConnectorName},
 		}))
 		Expect(reconciler.dexConnectorsForSecret(ctx, &corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: namespace},

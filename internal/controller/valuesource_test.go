@@ -28,11 +28,12 @@ import (
 	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
 )
 
+const secretKey = "token"
+
 var _ = Describe("ValueSource", func() {
 	const (
 		namespace  = "default"
 		secretName = "value-source-secret"
-		secretKey  = "token"
 	)
 
 	ctx := context.Background()
@@ -69,7 +70,7 @@ var _ = Describe("ValueSource", func() {
 
 	It("returns nil for an optional Secret that does not exist", func() {
 		optional := true
-		got, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, secretKey, &optional))
+		got, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, &optional))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(BeNil())
 	})
@@ -81,7 +82,7 @@ var _ = Describe("ValueSource", func() {
 		})).To(Succeed())
 
 		optional := true
-		got, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, secretKey, &optional))
+		got, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, &optional))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(BeNil())
 	})
@@ -92,7 +93,7 @@ var _ = Describe("ValueSource", func() {
 			Data:       map[string][]byte{"other": []byte("nope")},
 		})).To(Succeed())
 
-		_, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, secretKey, nil))
+		_, err := resolveValueSource(ctx, k8sClient, namespace, secretKeySource(secretName, nil))
 		Expect(err).To(MatchError(ContainSubstring("does not contain key")))
 	})
 
@@ -101,17 +102,17 @@ var _ = Describe("ValueSource", func() {
 		Expect(valueSourceReferencesSecret(&idpv1alpha1.ValueSource{}, secretName)).To(BeFalse())
 		value := "inline"
 		Expect(valueSourceReferencesSecret(&idpv1alpha1.ValueSource{Value: &value}, secretName)).To(BeFalse())
-		Expect(valueSourceReferencesSecret(secretKeySource(secretName, secretKey, nil), secretName)).To(BeTrue())
-		Expect(valueSourceReferencesSecret(secretKeySource("other-secret", secretKey, nil), secretName)).To(BeFalse())
+		Expect(valueSourceReferencesSecret(secretKeySource(secretName, nil), secretName)).To(BeTrue())
+		Expect(valueSourceReferencesSecret(secretKeySource("other-secret", nil), secretName)).To(BeFalse())
 	})
 })
 
-func secretKeySource(name, key string, optional *bool) *idpv1alpha1.ValueSource {
+func secretKeySource(name string, optional *bool) *idpv1alpha1.ValueSource {
 	return &idpv1alpha1.ValueSource{
 		ValueFrom: &idpv1alpha1.SecretValueSource{
 			SecretKeyRef: corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: name},
-				Key:                  key,
+				Key:                  secretKey,
 				Optional:             optional,
 			},
 		},
