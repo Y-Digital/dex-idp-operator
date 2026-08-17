@@ -37,6 +37,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+const (
+	testAppID       = "app"
+	testConnectorID = "oidc"
+)
+
 func TestBuildTLSConfig(t *testing.T) {
 	t.Parallel()
 
@@ -231,22 +236,22 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		_, err := client.GetClient(ctx, "app")
+		_, err := client.GetClient(ctx, testAppID)
 		g.Expect(err).To(MatchError(ContainSubstring("get dex client")))
 	})
 
 	t.Run("GetClient success", func(t *testing.T) {
 		g := NewWithT(t)
-		want := &dexapi.Client{Id: "app", Secret: "s"}
+		want := &dexapi.Client{Id: testAppID, Secret: "s"}
 		client := grpcClient{api: &fakeDexAPI{
 			getClient: func(context.Context, *dexapi.GetClientReq) (*dexapi.GetClientResp, error) {
 				return &dexapi.GetClientResp{Client: want}, nil
 			},
 		}}
 
-		got, err := client.GetClient(ctx, "app")
+		got, err := client.GetClient(ctx, testAppID)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(got.GetId()).To(Equal("app"))
+		g.Expect(got.GetId()).To(Equal(testAppID))
 	})
 
 	t.Run("CreateClient maps AlreadyExists", func(t *testing.T) {
@@ -257,7 +262,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		_, err := client.CreateClient(ctx, &dexapi.Client{Id: "app"})
+		_, err := client.CreateClient(ctx, &dexapi.Client{Id: testAppID})
 		g.Expect(err).To(MatchError(ErrAlreadyExists))
 	})
 
@@ -269,13 +274,13 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		_, err := client.CreateClient(ctx, &dexapi.Client{Id: "app"})
+		_, err := client.CreateClient(ctx, &dexapi.Client{Id: testAppID})
 		g.Expect(err).To(MatchError(ContainSubstring("create dex client")))
 	})
 
 	t.Run("CreateClient success", func(t *testing.T) {
 		g := NewWithT(t)
-		want := &dexapi.Client{Id: "app"}
+		want := &dexapi.Client{Id: testAppID}
 		client := grpcClient{api: &fakeDexAPI{
 			createClient: func(context.Context, *dexapi.CreateClientReq) (*dexapi.CreateClientResp, error) {
 				return &dexapi.CreateClientResp{Client: want}, nil
@@ -284,7 +289,7 @@ func TestGRPCClientMapping(t *testing.T) {
 
 		got, err := client.CreateClient(ctx, want)
 		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(got.GetId()).To(Equal("app"))
+		g.Expect(got.GetId()).To(Equal(testAppID))
 	})
 
 	t.Run("UpdateClient maps NotFound flag", func(t *testing.T) {
@@ -307,7 +312,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.UpdateClient(ctx, &dexapi.UpdateClientReq{Id: "app"})
+		err := client.UpdateClient(ctx, &dexapi.UpdateClientReq{Id: testAppID})
 		g.Expect(err).To(MatchError(ContainSubstring("update dex client")))
 	})
 
@@ -319,7 +324,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		g.Expect(client.UpdateClient(ctx, &dexapi.UpdateClientReq{Id: "app"})).To(Succeed())
+		g.Expect(client.UpdateClient(ctx, &dexapi.UpdateClientReq{Id: testAppID})).To(Succeed())
 	})
 
 	t.Run("DeleteClient maps NotFound flag", func(t *testing.T) {
@@ -342,7 +347,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.DeleteClient(ctx, "app")
+		err := client.DeleteClient(ctx, testAppID)
 		g.Expect(err).To(MatchError(ContainSubstring("delete dex client")))
 	})
 
@@ -354,7 +359,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		g.Expect(client.DeleteClient(ctx, "app")).To(Succeed())
+		g.Expect(client.DeleteClient(ctx, testAppID)).To(Succeed())
 	})
 
 	t.Run("GetVersion wraps transport errors", func(t *testing.T) {
@@ -390,7 +395,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.CreateConnector(ctx, &dexapi.Connector{Id: "oidc"})
+		err := client.CreateConnector(ctx, &dexapi.Connector{Id: testConnectorID})
 		g.Expect(err).To(MatchError(ErrAlreadyExists))
 	})
 
@@ -402,7 +407,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.CreateConnector(ctx, &dexapi.Connector{Id: "oidc"})
+		err := client.CreateConnector(ctx, &dexapi.Connector{Id: testConnectorID})
 		g.Expect(err).To(MatchError(ContainSubstring("create dex connector")))
 	})
 
@@ -414,7 +419,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		g.Expect(client.CreateConnector(ctx, &dexapi.Connector{Id: "oidc"})).To(Succeed())
+		g.Expect(client.CreateConnector(ctx, &dexapi.Connector{Id: testConnectorID})).To(Succeed())
 	})
 
 	t.Run("UpdateConnector maps NotFound flag", func(t *testing.T) {
@@ -437,7 +442,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.UpdateConnector(ctx, &dexapi.UpdateConnectorReq{Id: "oidc"})
+		err := client.UpdateConnector(ctx, &dexapi.UpdateConnectorReq{Id: testConnectorID})
 		g.Expect(err).To(MatchError(ContainSubstring("update dex connector")))
 	})
 
@@ -449,7 +454,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		g.Expect(client.UpdateConnector(ctx, &dexapi.UpdateConnectorReq{Id: "oidc"})).To(Succeed())
+		g.Expect(client.UpdateConnector(ctx, &dexapi.UpdateConnectorReq{Id: testConnectorID})).To(Succeed())
 	})
 
 	t.Run("DeleteConnector maps NotFound flag", func(t *testing.T) {
@@ -472,7 +477,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		err := client.DeleteConnector(ctx, "oidc")
+		err := client.DeleteConnector(ctx, testConnectorID)
 		g.Expect(err).To(MatchError(ContainSubstring("delete dex connector")))
 	})
 
@@ -484,7 +489,7 @@ func TestGRPCClientMapping(t *testing.T) {
 			},
 		}}
 
-		g.Expect(client.DeleteConnector(ctx, "oidc")).To(Succeed())
+		g.Expect(client.DeleteConnector(ctx, testConnectorID)).To(Succeed())
 	})
 }
 

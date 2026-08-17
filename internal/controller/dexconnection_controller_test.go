@@ -51,7 +51,7 @@ var _ = Describe("DexConnection Controller", func() {
 					Namespace: resourceNamespace,
 				},
 				Spec: idpv1alpha1.DexConnectionSpec{
-					Address:   "dex.example.com:5557",
+					Address:   testDexAddress,
 					Plaintext: true,
 				},
 			}

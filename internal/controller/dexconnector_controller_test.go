@@ -49,7 +49,7 @@ var _ = Describe("DexConnector Controller", func() {
 
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: resourceNamespace},
-				Data:       map[string][]byte{"clientSecret": []byte("shhh")},
+				Data:       map[string][]byte{oidcSecretKey: []byte("shhh")},
 			}
 			Expect(k8sClient.Create(ctx, secret)).To(Succeed())
 		})
@@ -64,16 +64,16 @@ var _ = Describe("DexConnector Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
 				Spec: idpv1alpha1.DexConnectorSpec{
 					ConnectorID: "test-oidc",
-					Type:        "oidc",
+					Type:        oidcType,
 					DisplayName: "Test OIDC",
 					Config:      runtime.RawExtension{Raw: []byte(raw)},
 					SecretRefs: []idpv1alpha1.DexConnectorSecretRef{
 						{
-							Name: "oidcSecret",
+							Name: oidcSecretRef,
 							ValueFrom: idpv1alpha1.SecretValueSource{
 								SecretKeyRef: corev1.SecretKeySelector{
 									LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-									Key:                  "clientSecret",
+									Key:                  oidcSecretKey,
 								},
 							},
 						},
@@ -95,17 +95,17 @@ var _ = Describe("DexConnector Controller", func() {
 			resolved, err := resolveDexConnector(ctx, k8sClient, resourceNamespace, updated)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(resolved.GetId()).To(Equal("test-oidc"))
-			Expect(resolved.GetType()).To(Equal("oidc"))
+			Expect(resolved.GetType()).To(Equal(oidcType))
 			Expect(resolved.GetName()).To(Equal("Test OIDC"))
 			Expect(string(resolved.GetConfig())).To(ContainSubstring(`"clientSecret":"shhh"`))
-			Expect(string(resolved.GetConfig())).NotTo(ContainSubstring("oidcSecret"))
+			Expect(string(resolved.GetConfig())).NotTo(ContainSubstring(oidcSecretRef))
 		})
 
 		It("rejects resolved config that is not a JSON object", func() {
 			connector := &idpv1alpha1.DexConnector{
 				Spec: idpv1alpha1.DexConnectorSpec{
 					ConnectorID: "broken-json",
-					Type:        "oidc",
+					Type:        oidcType,
 					DisplayName: "Broken",
 					Config:      runtime.RawExtension{Raw: []byte(`not-a-json-object`)},
 				},
@@ -119,7 +119,7 @@ var _ = Describe("DexConnector Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
 				Spec: idpv1alpha1.DexConnectorSpec{
 					ConnectorID: "fallback-id",
-					Type:        "oidc",
+					Type:        oidcType,
 					Config:      runtime.RawExtension{Raw: []byte(`{"issuer":"https://idp.example.com"}`)},
 				},
 			}
@@ -145,7 +145,7 @@ var _ = Describe("DexConnector Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{
 				Name: secretName, Namespace: resourceNamespace,
 			}, special)).To(Succeed())
-			special.Data["clientSecret"] = []byte("say \"hello\"\nnext")
+			special.Data[oidcSecretKey] = []byte("say \"hello\"\nnext")
 			Expect(k8sClient.Update(ctx, special)).To(Succeed())
 
 			raw := `{"issuer":"https://idp.example.com","clientSecret":"${oidcSecret}"}`
@@ -153,16 +153,16 @@ var _ = Describe("DexConnector Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
 				Spec: idpv1alpha1.DexConnectorSpec{
 					ConnectorID: "escaped-oidc",
-					Type:        "oidc",
+					Type:        oidcType,
 					DisplayName: "Escaped OIDC",
 					Config:      runtime.RawExtension{Raw: []byte(raw)},
 					SecretRefs: []idpv1alpha1.DexConnectorSecretRef{
 						{
-							Name: "oidcSecret",
+							Name: oidcSecretRef,
 							ValueFrom: idpv1alpha1.SecretValueSource{
 								SecretKeyRef: corev1.SecretKeySelector{
 									LocalObjectReference: corev1.LocalObjectReference{Name: secretName},
-									Key:                  "clientSecret",
+									Key:                  oidcSecretKey,
 								},
 							},
 						},
@@ -185,7 +185,7 @@ var _ = Describe("DexConnector Controller", func() {
 			Expect(err).NotTo(HaveOccurred())
 			parsed := map[string]any{}
 			Expect(json.Unmarshal(resolved.GetConfig(), &parsed)).To(Succeed())
-			Expect(parsed["clientSecret"]).To(Equal("say \"hello\"\nnext"))
+			Expect(parsed[oidcSecretKey]).To(Equal("say \"hello\"\nnext"))
 		})
 
 		It("reports NotReady when a secretRef cannot be resolved", func() {
@@ -194,7 +194,7 @@ var _ = Describe("DexConnector Controller", func() {
 				ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: resourceNamespace},
 				Spec: idpv1alpha1.DexConnectorSpec{
 					ConnectorID: "broken",
-					Type:        "oidc",
+					Type:        oidcType,
 					Config:      runtime.RawExtension{Raw: []byte(raw)},
 					SecretRefs: []idpv1alpha1.DexConnectorSecretRef{
 						{

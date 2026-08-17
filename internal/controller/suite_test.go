@@ -49,6 +49,15 @@ var (
 	k8sClient client.Client
 )
 
+const (
+	testDexAddress    = "dex.example.com:5557"
+	providedSecretKey = "secret"
+	caCertKey         = "ca.crt"
+	oidcType          = "oidc"
+	oidcSecretKey     = "clientSecret"
+	oidcSecretRef     = "oidcSecret"
+)
+
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
 
