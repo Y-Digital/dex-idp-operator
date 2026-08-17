@@ -1,5 +1,5 @@
 {{- if and .Values.dex.enabled .Values.dex.dexConnection.create }}
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnection
 metadata:
   labels:

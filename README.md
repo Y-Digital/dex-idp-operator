@@ -79,7 +79,7 @@ internal plaintext for this MVP; only reach it from within the cluster.
 Create a reusable connection to Dex:
 
 ```yaml
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnection
 metadata:
   name: dex-local
@@ -98,7 +98,7 @@ metadata:
 stringData:
   client-secret: change-me
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   name: example-app
@@ -135,7 +135,7 @@ metadata:
 stringData:
   clientSecret: change-me
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   name: tenant-a-connector
@@ -156,7 +156,7 @@ spec:
           name: tenant-a-oidc-secret
           key: clientSecret
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   name: tenant-a
@@ -193,7 +193,7 @@ Mount a single OAuth2 client onto multiple tenants, each getting its own
 generated client secret:
 
 ```yaml
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   name: backend-app
@@ -212,7 +212,7 @@ spec:
 For TLS-enabled Dex gRPC endpoints, provide CA and optional mTLS material:
 
 ```yaml
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnection
 metadata:
   name: dex

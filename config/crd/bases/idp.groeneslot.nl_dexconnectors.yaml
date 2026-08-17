@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dexconnectors.idp.groeneslot.nl
+  name: dexconnectors.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexConnector
     listKind: DexConnectorList

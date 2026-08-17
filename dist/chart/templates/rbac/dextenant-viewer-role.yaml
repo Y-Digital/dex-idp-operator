@@ -17,7 +17,7 @@ metadata:
   name: {{ include "dex-idp-operator.resourceName" (dict "suffix" "dextenant-viewer-role" "context" $) }}
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants
   verbs:
@@ -25,7 +25,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants/status
   verbs:

@@ -44,9 +44,9 @@ type DexConnectorReconciler struct {
 	Scheme *runtime.Scheme
 }
 
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnectors,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnectors/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnectors/finalizers,verbs=update
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnectors,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnectors/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnectors/finalizers,verbs=update
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
 // Reconcile validates that a DexConnector's config resolves to valid Dex connector

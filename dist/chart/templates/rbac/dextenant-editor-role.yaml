@@ -17,7 +17,7 @@ metadata:
   name: {{ include "dex-idp-operator.resourceName" (dict "suffix" "dextenant-editor-role" "context" $) }}
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants
   verbs:
@@ -29,7 +29,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants/status
   verbs:

@@ -12,9 +12,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dexclients.idp.groeneslot.nl
+  name: dexclients.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexClient
     listKind: DexClientList
@@ -306,9 +306,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dexconnections.idp.groeneslot.nl
+  name: dexconnections.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexConnection
     listKind: DexConnectionList
@@ -586,9 +586,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dexconnectors.idp.groeneslot.nl
+  name: dexconnectors.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexConnector
     listKind: DexConnectorList
@@ -786,9 +786,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dextenants.idp.groeneslot.nl
+  name: dextenants.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexTenant
     listKind: DexTenantList
@@ -1041,13 +1041,13 @@ metadata:
   name: dex-idp-operator-dexclient-admin-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   verbs:
@@ -1062,7 +1062,7 @@ metadata:
   name: dex-idp-operator-dexclient-editor-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   verbs:
@@ -1074,7 +1074,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   verbs:
@@ -1089,7 +1089,7 @@ metadata:
   name: dex-idp-operator-dexclient-viewer-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   verbs:
@@ -1097,7 +1097,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   verbs:
@@ -1112,13 +1112,13 @@ metadata:
   name: dex-idp-operator-dexconnection-admin-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections/status
   verbs:
@@ -1133,7 +1133,7 @@ metadata:
   name: dex-idp-operator-dexconnection-editor-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections
   verbs:
@@ -1145,7 +1145,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections/status
   verbs:
@@ -1160,7 +1160,7 @@ metadata:
   name: dex-idp-operator-dexconnection-viewer-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections
   verbs:
@@ -1168,7 +1168,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections/status
   verbs:
@@ -1183,13 +1183,13 @@ metadata:
   name: dex-idp-operator-dexconnector-admin-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors/status
   verbs:
@@ -1204,7 +1204,7 @@ metadata:
   name: dex-idp-operator-dexconnector-editor-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors
   verbs:
@@ -1216,7 +1216,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors/status
   verbs:
@@ -1231,7 +1231,7 @@ metadata:
   name: dex-idp-operator-dexconnector-viewer-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors
   verbs:
@@ -1239,7 +1239,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnectors/status
   verbs:
@@ -1254,13 +1254,13 @@ metadata:
   name: dex-idp-operator-dextenant-admin-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants/status
   verbs:
@@ -1275,7 +1275,7 @@ metadata:
   name: dex-idp-operator-dextenant-editor-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants
   verbs:
@@ -1287,7 +1287,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants/status
   verbs:
@@ -1302,7 +1302,7 @@ metadata:
   name: dex-idp-operator-dextenant-viewer-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants
   verbs:
@@ -1310,7 +1310,7 @@ rules:
   - list
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dextenants/status
   verbs:
@@ -1389,7 +1389,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   - dexconnections
@@ -1404,7 +1404,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/finalizers
   - dexconnections/finalizers
@@ -1413,7 +1413,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   - dexconnections/status

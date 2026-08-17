@@ -18,7 +18,7 @@ kind: Namespace
 metadata:
   name: tenant-b
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   labels:
@@ -36,7 +36,7 @@ spec:
     clientSecret: change-me
     redirectURI: https://tenant-a.example.com/dex/callback
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   labels:
@@ -54,7 +54,7 @@ spec:
     clientSecret: change-me
     redirectURI: https://tenant-b.example.com/dex/callback
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   labels:
@@ -67,7 +67,7 @@ spec:
   connectorRef:
     name: tenant-a-connector
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   labels:
@@ -83,7 +83,7 @@ spec:
 # Because public is false and tenantRefs is set, the operator generates a distinct client
 # secret Secret per tenant mount, in the DexClient's own namespace (see status.mounts on the
 # DexClient once it reconciles).
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   labels:

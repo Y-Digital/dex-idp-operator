@@ -455,7 +455,7 @@ kind: Namespace
 metadata:
   name: tenant-client-e2e
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   name: tenant-client-connector
@@ -466,7 +466,7 @@ spec:
   displayName: Tenant Client Mock
   config: {}
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   name: tenant-client
@@ -484,7 +484,7 @@ metadata:
 stringData:
   client-secret: initial-secret
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   name: e2e-app
@@ -513,7 +513,7 @@ kind: Namespace
 metadata:
   name: tenant-b-e2e
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   name: tenant-a-connector
@@ -524,7 +524,7 @@ spec:
   displayName: Tenant A Mock
   config: {}
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexConnector
 metadata:
   name: tenant-b-connector
@@ -535,7 +535,7 @@ spec:
   displayName: Tenant B Mock
   config: {}
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   name: tenant-a
@@ -545,7 +545,7 @@ spec:
   connectorRef:
     name: tenant-a-connector
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexTenant
 metadata:
   name: tenant-b
@@ -555,7 +555,7 @@ spec:
   connectorRef:
     name: tenant-b-connector
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   name: multi-app

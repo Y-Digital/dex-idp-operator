@@ -17,13 +17,13 @@ metadata:
   name: {{ include "dex-idp-operator.resourceName" (dict "suffix" "dexconnection-admin-role" "context" $) }}
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexconnections/status
   verbs:

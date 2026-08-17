@@ -1,7 +1,7 @@
 # This rule is not used by the project dex-idp-operator itself.
 # It is provided to allow the cluster admin to help manage permissions for users.
 #
-# Grants full permissions ('*') over idp.groeneslot.nl.
+# Grants full permissions ('*') over idp.y.digital.
 # This role is intended for users authorized to modify roles and bindings within the cluster,
 # enabling them to delegate specific permissions to other users or groups as needed.
 
@@ -14,13 +14,13 @@ metadata:
   name: dexclient-admin-role
 rules:
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   verbs:
   - '*'
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   verbs:

@@ -8,7 +8,7 @@ metadata:
 stringData:
   client-secret: change-me
 ---
-apiVersion: idp.groeneslot.nl/v1alpha1
+apiVersion: idp.y.digital/v1alpha1
 kind: DexClient
 metadata:
   labels:

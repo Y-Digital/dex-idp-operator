@@ -55,11 +55,11 @@ type DexTenantReconciler struct {
 	ClientFactory DexClientFactory
 }
 
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dextenants,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dextenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dextenants/finalizers,verbs=update
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnectors,verbs=get;list;watch
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnections,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dextenants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dextenants/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dextenants/finalizers,verbs=update
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnectors,verbs=get;list;watch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnections,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete

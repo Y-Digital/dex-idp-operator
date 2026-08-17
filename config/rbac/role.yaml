@@ -72,7 +72,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients
   - dexconnections
@@ -87,7 +87,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/finalizers
   - dexconnections/finalizers
@@ -96,7 +96,7 @@ rules:
   verbs:
   - update
 - apiGroups:
-  - idp.groeneslot.nl
+  - idp.y.digital
   resources:
   - dexclients/status
   - dexconnections/status

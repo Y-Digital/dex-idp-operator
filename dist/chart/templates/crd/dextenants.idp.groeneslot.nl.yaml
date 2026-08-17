@@ -4,9 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.20.1
-  name: dextenants.idp.groeneslot.nl
+  name: dextenants.idp.y.digital
 spec:
-  group: idp.groeneslot.nl
+  group: idp.y.digital
   names:
     kind: DexTenant
     listKind: DexTenantList

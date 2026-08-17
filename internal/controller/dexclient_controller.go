@@ -44,7 +44,7 @@ import (
 )
 
 const (
-	dexClientFinalizer = "idp.groeneslot.nl/dex-client"
+	dexClientFinalizer = "idp.y.digital/dex-client"
 	// generatedSecretKey is the Secret data key used for operator-generated client secrets.
 	generatedSecretKey = "client-secret"
 
@@ -77,11 +77,11 @@ type dexTarget struct {
 	ResolveErr error
 }
 
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexclients/finalizers,verbs=update
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dexconnections,verbs=get;list;watch
-// +kubebuilder:rbac:groups=idp.groeneslot.nl,resources=dextenants,verbs=get;list;watch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexclients,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexclients/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexclients/finalizers,verbs=update
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnections,verbs=get;list;watch
+// +kubebuilder:rbac:groups=idp.y.digital,resources=dextenants,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
 
 // Reconcile is part of the main kubernetes reconciliation loop which aims to

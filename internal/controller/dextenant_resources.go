@@ -46,7 +46,7 @@ import (
 const (
 	dexStorageAPIGroup   = "dex.coreos.com"
 	dexStorageAPIVersion = "v1"
-	dexConfigChecksumKey = "idp.groeneslot.nl/config-checksum"
+	dexConfigChecksumKey = "idp.y.digital/config-checksum"
 	dexAppName           = "dex"
 	dexConfigVolumeName  = "config"
 	// dexContainerUserID is the UID/GID of the dex user in official Dex images
