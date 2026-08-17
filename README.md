@@ -347,13 +347,13 @@ with or without an in-chart Dex deployment.
 Published releases push the **container image** and **Helm chart** to different
 OCI repositories so they do not clobber each other:
 
-- Image: `ghcr.io/<owner>/dex-idp-operator:<version>`
-- Chart: `oci://ghcr.io/<owner>/charts/dex-idp-operator` (version `<version>`)
+- Image: `ghcr.io/y-digital/dex-idp-operator:<version>`
+- Chart: `oci://ghcr.io/y-digital/charts/dex-idp-operator` (version `<version>`)
 
 Install from a published chart:
 
 ```sh
-helm install dex-idp-operator oci://ghcr.io/<owner>/charts/dex-idp-operator \
+helm install dex-idp-operator oci://ghcr.io/y-digital/charts/dex-idp-operator \
   --version <version> \
   --namespace dex-idp-operator-system \
   --create-namespace
