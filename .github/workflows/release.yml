@@ -19,8 +19,7 @@ env:
   # Container image and Helm chart MUST use different OCI repositories.
   # helm push to oci://ghcr.io/<owner> publishes as <owner>/<chart-name>:version and
   # would overwrite the container image at ghcr.io/<owner>/<repo>:version.
-  IMAGE: ghcr.io/${{ github.repository }}
-  CHART_OCI: oci://ghcr.io/${{ github.repository_owner }}/charts
+  # IMAGE/CHART_OCI are set lowercase in a job step (GHCR requires lowercase names).
   CHART_DIR: dist/chart
 
 jobs:
@@ -32,6 +31,12 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+
+      - name: Set image and chart repositories
+        run: |
+          # Docker/GHCR repository names must be lowercase (org may be mixed-case).
+          echo "IMAGE=${REGISTRY}/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "${GITHUB_ENV}"
+          echo "CHART_OCI=oci://${REGISTRY}/$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')/charts" >> "${GITHUB_ENV}"
 
       - name: Determine version
         id: version
