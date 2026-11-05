@@ -27,7 +27,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
 )
 
 var _ = Describe("DexConnection Controller", func() {

@@ -3,7 +3,7 @@
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
 cliVersion: 4.14.0
-domain: groeneslot.nl
+domain: y.digital
 layout:
 - go.kubebuilder.io/v4
 plugins:
@@ -11,42 +11,42 @@ plugins:
     manifests: dist/install.yaml
     output: dist
 projectName: dex-idp-operator
-repo: groeneslot.nl/dex-idp-operator
+repo: idp.y.digital/dex-idp-operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: groeneslot.nl
+  domain: y.digital
   group: idp
   kind: DexConnection
-  path: groeneslot.nl/dex-idp-operator/api/v1alpha1
+  path: idp.y.digital/dex-idp-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: groeneslot.nl
+  domain: y.digital
   group: idp
   kind: DexClient
-  path: groeneslot.nl/dex-idp-operator/api/v1alpha1
+  path: idp.y.digital/dex-idp-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: groeneslot.nl
+  domain: y.digital
   group: idp
   kind: DexConnector
-  path: groeneslot.nl/dex-idp-operator/api/v1alpha1
+  path: idp.y.digital/dex-idp-operator/api/v1alpha1
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
   controller: true
-  domain: groeneslot.nl
+  domain: y.digital
   group: idp
   kind: DexTenant
-  path: groeneslot.nl/dex-idp-operator/api/v1alpha1
+  path: idp.y.digital/dex-idp-operator/api/v1alpha1
   version: v1alpha1
 version: "3"

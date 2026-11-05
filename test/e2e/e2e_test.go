@@ -39,8 +39,8 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
-	"groeneslot.nl/dex-idp-operator/test/utils"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
+	"idp.y.digital/dex-idp-operator/test/utils"
 )
 
 // namespace where the project is deployed in

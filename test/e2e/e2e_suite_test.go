@@ -28,7 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"groeneslot.nl/dex-idp-operator/test/utils"
+	"idp.y.digital/dex-idp-operator/test/utils"
 )
 
 var (

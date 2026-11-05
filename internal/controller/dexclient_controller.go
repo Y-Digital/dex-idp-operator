@@ -39,8 +39,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
-	"groeneslot.nl/dex-idp-operator/internal/dex"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
+	"idp.y.digital/dex-idp-operator/internal/dex"
 )
 
 const (

@@ -168,9 +168,8 @@ spec:
   oauth2:
     # Optional; defaults to false. Enable only when every client is trusted.
     skipApprovalScreen: true
-    # Optional; passed through to Dex oauth2.grantTypes. Include
-    # client_credentials for confidential M2M clients. When omitted, Dex uses
-    # its own defaults (which do not include client_credentials).
+    # Optional; passed through to Dex oauth2.grantTypes. When omitted, the
+    # operator enables client_credentials through Dex's default-grant flag.
     grantTypes:
       - authorization_code
       - refresh_token
@@ -184,10 +183,11 @@ each managed instance. `spec.oauth2.grantTypes` is written to the managed Dex
 generated configuration and rolls that tenant's Deployment because Dex does
 not hot-reload `config.yaml`.
 
-Managed Dex pods default to `DefaultDexImage`, currently a digest-pinned
-`ghcr.io/dexidp/dex:master` build that includes the `client_credentials`
-grant. Override with `spec.image` if needed. Switch the default to
-`ghcr.io/dexidp/dex:v2.46.0` once that release ships.
+Managed Dex pods default to `ghcr.io/dexidp/dex:v2.46.1`, which includes the
+`client_credentials` grant. The operator sets
+`DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT=true`, so that grant is enabled
+when `spec.oauth2.grantTypes` is omitted. Override the image with `spec.image`
+if needed.
 
 Mount a single OAuth2 client onto multiple tenants, each getting its own
 generated client secret:

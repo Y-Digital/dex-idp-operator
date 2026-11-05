@@ -23,12 +23,8 @@ import (
 )
 
 // DefaultDexImage is the container image used for a managed tenant Dex deployment when
-// spec.image is not set.
-//
-// Pinned to a Dex master digest because client_credentials is not in any released
-// tag yet (latest stable is v2.45.1). Switch to ghcr.io/dexidp/dex:v2.46.0 when
-// that release ships.
-const DefaultDexImage = "ghcr.io/dexidp/dex:master@sha256:af9469509350ff3f6ca70127175a58e5ab085b9d18740fa4a590d9f03f0a026b"
+// spec.image is not set. Dex v2.46.1 includes the client_credentials grant.
+const DefaultDexImage = "ghcr.io/dexidp/dex:v2.46.1"
 
 // DexTenantOAuth2Config defines OAuth2 server behavior for a managed Dex instance.
 type DexTenantOAuth2Config struct {
@@ -38,9 +34,10 @@ type DexTenantOAuth2Config struct {
 	// +optional
 	SkipApprovalScreen bool `json:"skipApprovalScreen,omitempty"`
 
-	// grantTypes is the Dex oauth2.grantTypes list for this instance. When empty, Dex
-	// uses its own defaults, which do not include client_credentials. Include
-	// client_credentials explicitly for machine-to-machine clients.
+	// grantTypes is the Dex oauth2.grantTypes list for this instance. When empty, the
+	// operator leaves the list unset and enables client_credentials through
+	// DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT. Set this list to choose the
+	// grants Dex allows.
 	// +optional
 	// +listType=set
 	// +kubebuilder:validation:items:Enum=authorization_code;refresh_token;password;client_credentials;implicit;"urn:ietf:params:oauth:grant-type:token-exchange";"urn:ietf:params:oauth:grant-type:device_code"
