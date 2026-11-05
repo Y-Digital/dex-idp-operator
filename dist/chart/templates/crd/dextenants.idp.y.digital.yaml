@@ -1,8 +1,11 @@
----
+{{- if .Values.crd.enabled }}
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
+    {{- if .Values.crd.keep }}
+    "helm.sh/resource-policy": keep
+    {{- end }}
     controller-gen.kubebuilder.io/version: v0.20.1
   name: dextenants.idp.y.digital
 spec:
@@ -81,9 +84,10 @@ spec:
                 properties:
                   grantTypes:
                     description: |-
-                      grantTypes is the Dex oauth2.grantTypes list for this instance. When empty, Dex
-                      uses its own defaults, which do not include client_credentials. Include
-                      client_credentials explicitly for machine-to-machine clients.
+                      grantTypes is the Dex oauth2.grantTypes list for this instance. When empty, the
+                      operator leaves the list unset and enables client_credentials through
+                      DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT. Set this list to choose the
+                      grants Dex allows.
                     items:
                       enum:
                       - authorization_code
@@ -199,3 +203,4 @@ spec:
     storage: true
     subresources:
       status: {}
+{{- end }}

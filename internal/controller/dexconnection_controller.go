@@ -26,7 +26,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
 )
 
 // DexConnectionReconciler reconciles a DexConnection object

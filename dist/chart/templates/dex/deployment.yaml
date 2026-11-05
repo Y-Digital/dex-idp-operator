@@ -67,6 +67,8 @@ spec:
         env:
         - name: DEX_API_CONNECTORS_CRUD
           value: "true"
+        - name: DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT
+          value: "true"
         ports:
         - containerPort: {{ .Values.dex.service.httpPort }}
           name: http

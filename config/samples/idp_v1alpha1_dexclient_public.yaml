@@ -1,0 +1,17 @@
+# Public OAuth2 client for a SPA or mobile app. No client secret is required or stored;
+# set public: true and omit spec.secret.
+apiVersion: idp.y.digital/v1alpha1
+kind: DexClient
+metadata:
+  labels:
+    app.kubernetes.io/name: dex-idp-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: spa-app
+spec:
+  connectionRef:
+    name: dex-local
+  clientID: spa-app
+  public: true
+  redirectURIs:
+    - https://spa.example.com/callback
+  name: SPA App

@@ -38,7 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/yaml"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
 )
 
 // dexStorageAPIGroup and dexStorageAPIVersion identify the CRD group Dex's Kubernetes storage

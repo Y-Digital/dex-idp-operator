@@ -1,4 +1,4 @@
-module groeneslot.nl/dex-idp-operator
+module idp.y.digital/dex-idp-operator
 
 go 1.26.5
 

@@ -34,7 +34,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
-	idpv1alpha1 "groeneslot.nl/dex-idp-operator/api/v1alpha1"
+	idpv1alpha1 "idp.y.digital/dex-idp-operator/api/v1alpha1"
 	// +kubebuilder:scaffold:imports
 )
 
