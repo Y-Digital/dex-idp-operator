@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -99,6 +100,7 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				configMap)).To(Succeed())
 			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring("oauth2:"))
+			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring("sessions:"))
 			deployment := &appsv1.Deployment{}
 			Expect(k8sClient.Get(ctx,
 				types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}, deployment)).To(Succeed())
@@ -111,6 +113,9 @@ var _ = Describe("DexTenant Controller", func() {
 				Name:  "DEX_API_CONNECTORS_CRUD",
 				Value: strconv.FormatBool(true),
 			}))
+			Expect(deployment.Spec.Template.Spec.Containers[0].Env).NotTo(ContainElement(
+				HaveField("Name", dexSessionsEnabledEnv),
+			))
 			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2},
 				&corev1.Service{})).To(Succeed())
 
@@ -320,6 +325,141 @@ var _ = Describe("DexTenant Controller", func() {
 			Expect(deployment.Spec.Template.Annotations[dexConfigChecksumKey]).NotTo(Equal(approvalRequiredChecksum))
 			Expect(deployment.Spec.Template.Spec.Containers[0].Image).To(Equal(idpv1alpha1.DefaultDexImage))
 		})
+
+		It("enables browser sessions and stores the cookie encryption key in a Secret", func() {
+			tenant := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Spec.Sessions = &idpv1alpha1.DexTenantSessionConfig{}
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			secret := &corev1.Secret{}
+			secretKey := types.NamespacedName{Namespace: resourceNamespace, Name: dexSessionSecretName(tenant)}
+			Expect(k8sClient.Get(ctx, secretKey, secret)).To(Succeed())
+			Expect(secret.OwnerReferences).NotTo(BeEmpty())
+			cookieKey := string(secret.Data[dexSessionCookieKey])
+			Expect(cookieKey).To(HaveLen(32))
+
+			resourceKey := types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}
+			configMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("sessions:\n"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("cookieEncryptionKey: " + cookieKey))
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Spec.Containers[0].Env).To(ContainElement(corev1.EnvVar{
+				Name:  dexSessionsEnabledEnv,
+				Value: strconv.FormatBool(true),
+			}))
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, secretKey, secret)).To(Succeed())
+			Expect(string(secret.Data[dexSessionCookieKey])).To(Equal(cookieKey))
+		})
+
+		It("rejects a cookie encryption key of the wrong length without writing session config", func() {
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			const cookieSecretName = "tenant-a-cookie"
+			Expect(k8sClient.Create(ctx, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: cookieSecretName, Namespace: resourceNamespace},
+				Data:       map[string][]byte{dexSessionCookieKey: []byte("short")},
+			})).To(Succeed())
+
+			tenant := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			tenant.Spec.Sessions = &idpv1alpha1.DexTenantSessionConfig{
+				CookieEncryptionKeySecretRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cookieSecretName},
+					Key:                  dexSessionCookieKey,
+				},
+			}
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("16, 24, or 32 bytes"))
+
+			updated := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, updated)).To(Succeed())
+			condition := meta.FindStatusCondition(updated.Status.Conditions, idpv1alpha1.ConditionReady)
+			Expect(condition).NotTo(BeNil())
+			Expect(condition.Status).To(Equal(metav1.ConditionFalse))
+			Expect(condition.Reason).To(Equal(reasonSessionKeyInvalid))
+
+			configMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring("sessions:"))
+			Expect(k8sClient.Get(ctx, types.NamespacedName{
+				Namespace: resourceNamespace, Name: dexSessionSecretName(tenant),
+			}, &corev1.Secret{})).NotTo(Succeed())
+		})
+
+		It("rolls Dex when the referenced cookie encryption key changes", func() {
+			const cookieSecretName = "tenant-a-cookie"
+			originalKey := "abcdefghijklmnopqrstuvwxyz012345"
+			rotatedKey := "ABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+			Expect(k8sClient.Create(ctx, &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{Name: cookieSecretName, Namespace: resourceNamespace},
+				Data:       map[string][]byte{dexSessionCookieKey: []byte(originalKey)},
+			})).To(Succeed())
+
+			tenant := &idpv1alpha1.DexTenant{}
+			Expect(k8sClient.Get(ctx, typeNamespacedName, tenant)).To(Succeed())
+			lifetime := metav1.Duration{Duration: 12 * time.Hour}
+			idle := metav1.Duration{Duration: 30 * time.Minute}
+			rememberMe := false
+			tenant.Spec.Sessions = &idpv1alpha1.DexTenantSessionConfig{
+				CookieName:                 "tenant_session",
+				AbsoluteLifetime:           &lifetime,
+				ValidIfNotUsedFor:          &idle,
+				RememberMeCheckedByDefault: &rememberMe,
+				SSOSharedWithDefault:       "all",
+				CookieEncryptionKeySecretRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cookieSecretName},
+					Key:                  dexSessionCookieKey,
+				},
+			}
+			Expect(k8sClient.Update(ctx, tenant)).To(Succeed())
+
+			reconciler := newTestDexTenantReconciler(fakeDex)
+			_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+
+			resourceKey := types.NamespacedName{Namespace: resourceNamespace, Name: resourceName2}
+			configMap := &corev1.ConfigMap{}
+			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("cookieEncryptionKey: " + originalKey))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("cookieName: tenant_session"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("absoluteLifetime: 12h0m0s"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("validIfNotUsedFor: 30m0s"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("rememberMeCheckedByDefault: false"))
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("ssoSharedWithDefault: all"))
+
+			deployment := &appsv1.Deployment{}
+			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
+			originalChecksum := deployment.Spec.Template.Annotations[dexConfigChecksumKey]
+
+			cookieSecret := &corev1.Secret{}
+			Expect(k8sClient.Get(ctx, types.NamespacedName{Namespace: resourceNamespace, Name: cookieSecretName}, cookieSecret)).To(Succeed())
+			cookieSecret.Data[dexSessionCookieKey] = []byte(rotatedKey)
+			Expect(k8sClient.Update(ctx, cookieSecret)).To(Succeed())
+
+			_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: typeNamespacedName})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, resourceKey, configMap)).To(Succeed())
+			Expect(configMap.Data["config.yaml"]).To(ContainSubstring("cookieEncryptionKey: " + rotatedKey))
+			Expect(configMap.Data["config.yaml"]).NotTo(ContainSubstring(originalKey))
+			Expect(k8sClient.Get(ctx, resourceKey, deployment)).To(Succeed())
+			Expect(deployment.Spec.Template.Annotations[dexConfigChecksumKey]).NotTo(Equal(originalChecksum))
+		})
 	})
 })
 
@@ -343,6 +483,7 @@ func cleanupDexTenantTestResources(ctx context.Context, namespace string) {
 	Expect(k8sClient.DeleteAllOf(ctx, &corev1.ServiceAccount{}, client.InNamespace(namespace))).To(Succeed())
 	Expect(k8sClient.DeleteAllOf(ctx, &rbacv1.Role{}, client.InNamespace(namespace))).To(Succeed())
 	Expect(k8sClient.DeleteAllOf(ctx, &rbacv1.RoleBinding{}, client.InNamespace(namespace))).To(Succeed())
+	Expect(k8sClient.DeleteAllOf(ctx, &corev1.Secret{}, client.InNamespace(namespace))).To(Succeed())
 
 	Eventually(func(g Gomega) {
 		tenants := &idpv1alpha1.DexTenantList{}

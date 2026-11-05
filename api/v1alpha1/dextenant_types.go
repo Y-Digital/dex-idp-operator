@@ -44,6 +44,49 @@ type DexTenantOAuth2Config struct {
 	GrantTypes []string `json:"grantTypes,omitempty"`
 }
 
+// DexTenantSessionConfig enables Dex browser sessions for one managed instance.
+//
+// Presence of this block opts in. Dex stores each browser session as an AuthSession
+// in its Kubernetes storage and stores login consent on UserIdentity. The browser
+// cookie only carries the session id and secret. Dex encrypts that cookie with
+// cookieEncryptionKey, which is read from a Secret and is not stored on this resource.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.validIfNotUsedFor) || !has(self.absoluteLifetime) || duration(self.validIfNotUsedFor) <= duration(self.absoluteLifetime)",message="validIfNotUsedFor must not exceed absoluteLifetime"
+type DexTenantSessionConfig struct {
+	// cookieName is the browser session cookie name. Defaults to dex_session when unset.
+	// +kubebuilder:validation:MinLength=1
+	// +optional
+	CookieName string `json:"cookieName,omitempty"`
+
+	// absoluteLifetime is the maximum session lifetime from creation. Defaults to 24h
+	// when unset.
+	// +optional
+	AbsoluteLifetime *metav1.Duration `json:"absoluteLifetime,omitempty"`
+
+	// validIfNotUsedFor is the idle timeout. Defaults to 1h when unset. It must not
+	// exceed absoluteLifetime.
+	// +optional
+	ValidIfNotUsedFor *metav1.Duration `json:"validIfNotUsedFor,omitempty"`
+
+	// rememberMeCheckedByDefault controls the default state of Dex's remember-me
+	// checkbox. When unset, Dex defaults this to true.
+	// +optional
+	RememberMeCheckedByDefault *bool `json:"rememberMeCheckedByDefault,omitempty"`
+
+	// ssoSharedWithDefault is the SSO sharing policy for clients that do not set their
+	// own. "none" shares with no other client. "all" shares with every client. Defaults
+	// to none when unset.
+	// +kubebuilder:validation:Enum=none;all
+	// +optional
+	SSOSharedWithDefault string `json:"ssoSharedWithDefault,omitempty"`
+
+	// cookieEncryptionKeySecretRef selects a Secret key in this tenant's namespace whose
+	// value is 16, 24, or 32 bytes. When unset, the operator creates an owned Secret and
+	// keeps its value stable across reconciles.
+	// +optional
+	CookieEncryptionKeySecretRef *corev1.SecretKeySelector `json:"cookieEncryptionKeySecretRef,omitempty"`
+}
+
 // DexTenantSpec defines the desired state of a tenant-scoped, operator-managed Dex instance.
 //
 // A DexTenant owns one Dex Deployment, Service, and Kubernetes-storage-backed issuer. The
@@ -77,6 +120,12 @@ type DexTenantSpec struct {
 	// oauth2 configures OAuth2 server behavior for this managed Dex instance.
 	// +optional
 	OAuth2 *DexTenantOAuth2Config `json:"oauth2,omitempty"`
+
+	// sessions enables Dex browser sessions for this managed Dex instance. Omit it to
+	// leave the instance stateless. An empty object enables Dex's session defaults and
+	// an operator-generated cookie encryption key.
+	// +optional
+	Sessions *DexTenantSessionConfig `json:"sessions,omitempty"`
 }
 
 // DexTenantStatus defines the observed state of DexTenant.

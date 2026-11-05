@@ -892,6 +892,73 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              sessions:
+                description: |-
+                  sessions enables Dex browser sessions for this managed Dex instance. Omit it to
+                  leave the instance stateless. An empty object enables Dex's session defaults and
+                  an operator-generated cookie encryption key.
+                properties:
+                  absoluteLifetime:
+                    description: |-
+                      absoluteLifetime is the maximum session lifetime from creation. Defaults to 24h
+                      when unset.
+                    type: string
+                  cookieEncryptionKeySecretRef:
+                    description: |-
+                      cookieEncryptionKeySecretRef selects a Secret key in this tenant's namespace whose
+                      value is 16, 24, or 32 bytes. When unset, the operator creates an owned Secret and
+                      keeps its value stable across reconciles.
+                    properties:
+                      key:
+                        description: The key of the secret to select from.  Must be
+                          a valid secret key.
+                        type: string
+                      name:
+                        default: ""
+                        description: |-
+                          Name of the referent.
+                          This field is effectively required, but due to backwards compatibility is
+                          allowed to be empty. Instances of this type with an empty value here are
+                          almost certainly wrong.
+                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                        type: string
+                      optional:
+                        description: Specify whether the Secret or its key must be
+                          defined
+                        type: boolean
+                    required:
+                    - key
+                    type: object
+                    x-kubernetes-map-type: atomic
+                  cookieName:
+                    description: cookieName is the browser session cookie name. Defaults
+                      to dex_session when unset.
+                    minLength: 1
+                    type: string
+                  rememberMeCheckedByDefault:
+                    description: |-
+                      rememberMeCheckedByDefault controls the default state of Dex's remember-me
+                      checkbox. When unset, Dex defaults this to true.
+                    type: boolean
+                  ssoSharedWithDefault:
+                    description: |-
+                      ssoSharedWithDefault is the SSO sharing policy for clients that do not set their
+                      own. "none" shares with no other client. "all" shares with every client. Defaults
+                      to none when unset.
+                    enum:
+                    - none
+                    - all
+                    type: string
+                  validIfNotUsedFor:
+                    description: |-
+                      validIfNotUsedFor is the idle timeout. Defaults to 1h when unset. It must not
+                      exceed absoluteLifetime.
+                    type: string
+                type: object
+                x-kubernetes-validations:
+                - message: validIfNotUsedFor must not exceed absoluteLifetime
+                  rule: '!has(self.validIfNotUsedFor) || !has(self.absoluteLifetime)
+                    || duration(self.validIfNotUsedFor) <= duration(self.absoluteLifetime)'
             required:
             - connectorRef
             - issuer

@@ -46,6 +46,8 @@ const (
 	dexUnavailableRequeueInterval = 10 * time.Second
 
 	messageConnectorSynced = "Dex tenant connector is synced"
+
+	reasonSessionKeyInvalid = "SessionKeyInvalid"
 )
 
 // DexTenantReconciler reconciles a DexTenant object
@@ -60,7 +62,7 @@ type DexTenantReconciler struct {
 // +kubebuilder:rbac:groups=idp.y.digital,resources=dextenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnectors,verbs=get;list;watch
 // +kubebuilder:rbac:groups=idp.y.digital,resources=dexconnections,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
@@ -74,7 +76,8 @@ type DexTenantReconciler struct {
 // Kubernetes storage CRDs and RBAC exist, renders the Dex Deployment/Service/ConfigMap,
 // manages an owned DexConnection for reaching the instance, pre-seeds the tenant's connector
 // into storage before Dex ever starts, and keeps that connector in sync afterward using Dex's
-// gRPC connector API.
+// gRPC connector API. When spec.sessions is set, it also gives Dex a stable cookie encryption
+// key and enables browser sessions stored as AuthSession objects.
 func (r *DexTenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
@@ -106,10 +109,14 @@ func (r *DexTenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.ensureStorageRBAC(ctx, tenant); err != nil {
 		return ctrl.Result{}, r.statusError(ctx, tenant, "RBACFailed", err)
 	}
-	if err := r.ensureConfigMap(ctx, tenant); err != nil {
+	cookieEncryptionKey, err := r.resolveSessionCookieKey(ctx, tenant)
+	if err != nil {
+		return ctrl.Result{}, r.statusError(ctx, tenant, reasonSessionKeyInvalid, err)
+	}
+	if err := r.ensureConfigMap(ctx, tenant, cookieEncryptionKey); err != nil {
 		return ctrl.Result{}, r.statusError(ctx, tenant, "ConfigMapFailed", err)
 	}
-	if err := r.ensureDeployment(ctx, tenant); err != nil {
+	if err := r.ensureDeployment(ctx, tenant, cookieEncryptionKey); err != nil {
 		return ctrl.Result{}, r.statusError(ctx, tenant, "DeploymentFailed", err)
 	}
 	if err := r.ensureService(ctx, tenant); err != nil {
@@ -227,6 +234,7 @@ func (r *DexTenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ConfigMap{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.Secret{}).
 		Watches(&idpv1alpha1.DexConnector{}, handler.EnqueueRequestsFromMapFunc(r.dexTenantsForConnector)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.dexTenantsForSecret)).
 		Named("dextenant").
@@ -264,9 +272,6 @@ func (r *DexTenantReconciler) dexTenantsForSecret(ctx context.Context, object cl
 			}
 		}
 	}
-	if referencing.Len() == 0 {
-		return nil
-	}
 
 	tenants := &idpv1alpha1.DexTenantList{}
 	if err := r.List(ctx, tenants, client.InNamespace(object.GetNamespace())); err != nil {
@@ -274,12 +279,27 @@ func (r *DexTenantReconciler) dexTenantsForSecret(ctx context.Context, object cl
 	}
 
 	requests := make([]reconcile.Request, 0, len(tenants.Items))
+	seen := sets.New[string]()
 	for _, item := range tenants.Items {
-		if referencing.Has(item.Spec.ConnectorRef.Name) {
-			requests = append(requests, reconcile.Request{
-				NamespacedName: types.NamespacedName{Namespace: item.Namespace, Name: item.Name},
-			})
+		matchesConnector := referencing.Has(item.Spec.ConnectorRef.Name)
+		matchesSession := sessionSecretRefMatches(&item, object.GetName())
+		if !matchesConnector && !matchesSession {
+			continue
 		}
+		if seen.Has(item.Name) {
+			continue
+		}
+		seen.Insert(item.Name)
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: item.Namespace, Name: item.Name},
+		})
 	}
 	return requests
+}
+
+func sessionSecretRefMatches(tenant *idpv1alpha1.DexTenant, secretName string) bool {
+	sessions := tenant.Spec.Sessions
+	return sessions != nil &&
+		sessions.CookieEncryptionKeySecretRef != nil &&
+		sessions.CookieEncryptionKeySecretRef.Name == secretName
 }

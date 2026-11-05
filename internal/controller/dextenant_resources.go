@@ -18,9 +18,11 @@ package controller
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"math/big"
 	"strconv"
 
 	dexapi "github.com/dexidp/dex/api/v2"
@@ -54,6 +56,15 @@ const (
 	// instead of USER 1001:1001; kubelet cannot verify runAsNonRoot against a
 	// named image user, so the pod must set a numeric runAsUser.
 	dexContainerUserID int64 = 1001
+
+	// dexSessionCookieKey is the Secret data key and Dex config field for the AES key
+	// that encrypts the browser session cookie.
+	dexSessionCookieKey = "cookieEncryptionKey"
+	// dexSessionsEnabledEnv is the Dex feature flag that turns on browser sessions.
+	dexSessionsEnabledEnv = "DEX_SESSIONS_ENABLED"
+	// dexSessionKeyAlphabet excludes '$' so a generated key is not expanded if Dex
+	// later treats the rendered config value as an environment reference.
+	dexSessionKeyAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 )
 
 // dexStorageResources lists every custom resource Dex's Kubernetes storage backend requires,
@@ -196,7 +207,16 @@ type dexOAuth2YAML struct {
 	GrantTypes         []string `json:"grantTypes,omitempty"`
 }
 
-func dexTenantConfig(tenant *idpv1alpha1.DexTenant) string {
+type dexSessionsYAML struct {
+	CookieName                 string `json:"cookieName,omitempty"`
+	AbsoluteLifetime           string `json:"absoluteLifetime,omitempty"`
+	ValidIfNotUsedFor          string `json:"validIfNotUsedFor,omitempty"`
+	RememberMeCheckedByDefault *bool  `json:"rememberMeCheckedByDefault,omitempty"`
+	CookieEncryptionKey        string `json:"cookieEncryptionKey"`
+	SSOSharedWithDefault       string `json:"ssoSharedWithDefault,omitempty"`
+}
+
+func dexTenantConfig(tenant *idpv1alpha1.DexTenant, cookieEncryptionKey string) (string, error) {
 	config := fmt.Sprintf(`issuer: %s
 storage:
   type: kubernetes
@@ -207,33 +227,181 @@ web:
 grpc:
   addr: 0.0.0.0:5557
 `, tenant.Spec.Issuer)
-	if tenant.Spec.OAuth2 == nil {
-		return config
+	if tenant.Spec.OAuth2 != nil {
+		block, err := yaml.Marshal(map[string]dexOAuth2YAML{
+			"oauth2": {
+				SkipApprovalScreen: tenant.Spec.OAuth2.SkipApprovalScreen,
+				GrantTypes:         tenant.Spec.OAuth2.GrantTypes,
+			},
+		})
+		if err != nil {
+			config += fmt.Sprintf("oauth2:\n  skipApprovalScreen: %t\n", tenant.Spec.OAuth2.SkipApprovalScreen)
+		} else {
+			config += string(block)
+		}
 	}
-	block, err := yaml.Marshal(map[string]dexOAuth2YAML{
-		"oauth2": {
-			SkipApprovalScreen: tenant.Spec.OAuth2.SkipApprovalScreen,
-			GrantTypes:         tenant.Spec.OAuth2.GrantTypes,
-		},
+	if tenant.Spec.Sessions == nil {
+		return config, nil
+	}
+	if err := validateCookieEncryptionKey(cookieEncryptionKey); err != nil {
+		return "", err
+	}
+	block, err := yaml.Marshal(map[string]dexSessionsYAML{
+		"sessions": sessionConfigYAML(tenant.Spec.Sessions, cookieEncryptionKey),
 	})
 	if err != nil {
-		return config + fmt.Sprintf("oauth2:\n  skipApprovalScreen: %t\n", tenant.Spec.OAuth2.SkipApprovalScreen)
+		return "", fmt.Errorf("marshal sessions config: %w", err)
 	}
-	return config + string(block)
+	return config + string(block), nil
 }
 
-func (r *DexTenantReconciler) ensureConfigMap(ctx context.Context, tenant *idpv1alpha1.DexTenant) error {
+func sessionConfigYAML(sessions *idpv1alpha1.DexTenantSessionConfig, cookieEncryptionKey string) dexSessionsYAML {
+	rendered := dexSessionsYAML{
+		CookieName:                 sessions.CookieName,
+		RememberMeCheckedByDefault: sessions.RememberMeCheckedByDefault,
+		CookieEncryptionKey:        cookieEncryptionKey,
+		SSOSharedWithDefault:       sessions.SSOSharedWithDefault,
+	}
+	if sessions.AbsoluteLifetime != nil {
+		rendered.AbsoluteLifetime = sessions.AbsoluteLifetime.Duration.String()
+	}
+	if sessions.ValidIfNotUsedFor != nil {
+		rendered.ValidIfNotUsedFor = sessions.ValidIfNotUsedFor.Duration.String()
+	}
+	return rendered
+}
+
+func validateCookieEncryptionKey(key string) error {
+	switch len(key) {
+	case 16, 24, 32:
+		return nil
+	default:
+		return fmt.Errorf("cookie encryption key must be 16, 24, or 32 bytes, got %d", len(key))
+	}
+}
+
+func dexSessionSecretName(tenant *idpv1alpha1.DexTenant) string {
+	return dexTenantResourceName(tenant) + "-session"
+}
+
+func (r *DexTenantReconciler) resolveSessionCookieKey(ctx context.Context, tenant *idpv1alpha1.DexTenant) (string, error) {
+	if tenant.Spec.Sessions == nil {
+		return "", nil
+	}
+	if ref := tenant.Spec.Sessions.CookieEncryptionKeySecretRef; ref != nil {
+		return readCookieEncryptionKey(ctx, r.Client, tenant.Namespace, ref)
+	}
+	return r.ensureGeneratedSessionKey(ctx, tenant)
+}
+
+func readCookieEncryptionKey(
+	ctx context.Context,
+	c client.Client,
+	namespace string,
+	ref *corev1.SecretKeySelector,
+) (string, error) {
+	if ref.Name == "" || ref.Key == "" {
+		return "", fmt.Errorf("cookie encryption key secret ref requires a name and key")
+	}
+	secret := &corev1.Secret{}
+	if err := c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: ref.Name}, secret); err != nil {
+		return "", fmt.Errorf("get cookie encryption key secret %q: %w", ref.Name, err)
+	}
+	value, ok := secret.Data[ref.Key]
+	if !ok {
+		return "", fmt.Errorf("secret %q does not contain key %q", ref.Name, ref.Key)
+	}
+	key := string(value)
+	if err := validateCookieEncryptionKey(key); err != nil {
+		return "", fmt.Errorf("secret %q key %q: %w", ref.Name, ref.Key, err)
+	}
+	return key, nil
+}
+
+func (r *DexTenantReconciler) ensureGeneratedSessionKey(ctx context.Context, tenant *idpv1alpha1.DexTenant) (string, error) {
+	name := dexSessionSecretName(tenant)
+	secret := &corev1.Secret{}
+	err := r.Get(ctx, types.NamespacedName{Namespace: tenant.Namespace, Name: name}, secret)
+	switch {
+	case err == nil:
+		value, ok := secret.Data[dexSessionCookieKey]
+		if !ok {
+			return "", fmt.Errorf("secret %q does not contain key %q", name, dexSessionCookieKey)
+		}
+		key := string(value)
+		if err := validateCookieEncryptionKey(key); err != nil {
+			return "", fmt.Errorf("secret %q: %w", name, err)
+		}
+		return key, nil
+	case apierrors.IsNotFound(err):
+		return r.createSessionSecret(ctx, tenant, name)
+	default:
+		return "", err
+	}
+}
+
+func (r *DexTenantReconciler) createSessionSecret(ctx context.Context, tenant *idpv1alpha1.DexTenant, name string) (string, error) {
+	key, err := generateCookieEncryptionKey()
+	if err != nil {
+		return "", err
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tenant.Namespace},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{dexSessionCookieKey: []byte(key)},
+	}
+	if err := controllerutil.SetControllerReference(tenant, secret, r.Scheme); err != nil {
+		return "", err
+	}
+	if err := r.Create(ctx, secret); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return r.ensureGeneratedSessionKey(ctx, tenant)
+		}
+		return "", err
+	}
+	return key, nil
+}
+
+func generateCookieEncryptionKey() (string, error) {
+	out := make([]byte, 32)
+	alphabetLen := big.NewInt(int64(len(dexSessionKeyAlphabet)))
+	for i := range out {
+		n, err := rand.Int(rand.Reader, alphabetLen)
+		if err != nil {
+			return "", fmt.Errorf("generate cookie encryption key: %w", err)
+		}
+		out[i] = dexSessionKeyAlphabet[n.Int64()]
+	}
+	return string(out), nil
+}
+
+func (r *DexTenantReconciler) ensureConfigMap(ctx context.Context, tenant *idpv1alpha1.DexTenant, cookieEncryptionKey string) error {
+	config, err := dexTenantConfig(tenant, cookieEncryptionKey)
+	if err != nil {
+		return err
+	}
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: dexTenantResourceName(tenant), Namespace: tenant.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
-		cm.Data = map[string]string{"config.yaml": dexTenantConfig(tenant)}
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, cm, func() error {
+		cm.Data = map[string]string{"config.yaml": config}
 		return controllerutil.SetControllerReference(tenant, cm, r.Scheme)
 	})
 	return err
 }
 
-func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv1alpha1.DexTenant) error {
+func dexContainerEnv(tenant *idpv1alpha1.DexTenant) []corev1.EnvVar {
+	env := []corev1.EnvVar{
+		{Name: "DEX_API_CONNECTORS_CRUD", Value: strconv.FormatBool(true)},
+		{Name: "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT", Value: strconv.FormatBool(true)},
+	}
+	if tenant.Spec.Sessions != nil {
+		env = append(env, corev1.EnvVar{Name: dexSessionsEnabledEnv, Value: strconv.FormatBool(true)})
+	}
+	return env
+}
+
+func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv1alpha1.DexTenant, cookieEncryptionKey string) error {
 	image := tenant.Spec.Image
 	if image == "" {
 		image = idpv1alpha1.DefaultDexImage
@@ -244,12 +412,16 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 	}
 	labels := dexTenantLabels(tenant)
 	name := dexTenantResourceName(tenant)
-	configChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(dexTenantConfig(tenant))))
+	config, err := dexTenantConfig(tenant, cookieEncryptionKey)
+	if err != nil {
+		return err
+	}
+	configChecksum := fmt.Sprintf("%x", sha256.Sum256([]byte(config)))
 
 	deployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: tenant.Namespace},
 	}
-	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
+	_, err = controllerutil.CreateOrUpdate(ctx, r.Client, deployment, func() error {
 		deployment.Spec = appsv1.DeploymentSpec{
 			Replicas: replicas,
 			Selector: &metav1.LabelSelector{MatchLabels: labels},
@@ -273,10 +445,7 @@ func (r *DexTenantReconciler) ensureDeployment(ctx context.Context, tenant *idpv
 							Name:    dexAppName,
 							Image:   image,
 							Command: []string{dexAppName, "serve", "/etc/dex/config.yaml"},
-							Env: []corev1.EnvVar{
-								{Name: "DEX_API_CONNECTORS_CRUD", Value: strconv.FormatBool(true)},
-								{Name: "DEX_CLIENT_CREDENTIAL_GRANT_ENABLED_BY_DEFAULT", Value: strconv.FormatBool(true)},
-							},
+							Env:     dexContainerEnv(tenant),
 							Ports: []corev1.ContainerPort{
 								{Name: "http", ContainerPort: 5556},
 								{Name: "grpc", ContainerPort: 5557},

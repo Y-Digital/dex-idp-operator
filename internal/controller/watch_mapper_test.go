@@ -133,6 +133,30 @@ var _ = Describe("Watch mappers", func() {
 		})).To(BeEmpty())
 	})
 
+	It("maps a cookie encryption Secret change to the DexTenant that references it", func() {
+		const cookieSecretName = "session-cookie-key"
+		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexTenant{
+			ObjectMeta: metav1.ObjectMeta{Name: "session-tenant", Namespace: namespace},
+			Spec: idpv1alpha1.DexTenantSpec{
+				Issuer:       "https://session.example.com/dex",
+				ConnectorRef: corev1.LocalObjectReference{Name: "other-connector"},
+				Sessions: &idpv1alpha1.DexTenantSessionConfig{
+					CookieEncryptionKeySecretRef: &corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: cookieSecretName},
+						Key:                  dexSessionCookieKey,
+					},
+				},
+			},
+		})).To(Succeed())
+
+		reconciler := &DexTenantReconciler{Client: k8sClient, Scheme: k8sClient.Scheme()}
+		Expect(reconciler.dexTenantsForSecret(ctx, &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cookieSecretName, Namespace: namespace},
+		})).To(ConsistOf(reconcile.Request{
+			NamespacedName: types.NamespacedName{Namespace: namespace, Name: "session-tenant"},
+		}))
+	})
+
 	It("maps a DexConnection change to DexClients that reference it", func() {
 		Expect(k8sClient.Create(ctx, &idpv1alpha1.DexConnection{
 			ObjectMeta: metav1.ObjectMeta{Name: mapConnectionName, Namespace: namespace},
